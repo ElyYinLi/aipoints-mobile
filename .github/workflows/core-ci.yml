@@ -1,0 +1,33 @@
+name: core-ci
+
+on:
+  push:
+    paths: ["core/**", ".github/workflows/core-ci.yml"]
+  pull_request:
+    paths: ["core/**"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Linux runner 按 1x 计费，引擎测试全在这跑，macOS 只留给打包
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache-dependency-path: core/go.sum
+      - name: gofmt 检查
+        working-directory: core
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "以下文件未格式化:"; echo "$out"; exit 1; fi
+      - name: go vet
+        working-directory: core
+        run: go vet ./...
+      - name: 单元测试
+        working-directory: core
+        run: go test -race -cover ./...
+      - name: 构建 CLI
+        working-directory: core
+        run: go build -o /tmp/pointsctl ./cmd/pointsctl && /tmp/pointsctl -action providers

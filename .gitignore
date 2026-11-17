@@ -1,0 +1,30 @@
+# 凭据与数据
+data/
+accounts.json
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.ipa
+*.apk
+*.aab
+
+# 构建产物
+dist/
+build/
+core/core.a
+core/*.aar
+core/*.framework/
+*.so
+*.dylib
+
+# 本地环境
+.DS_Store
+.idea/
+.vscode/
+*.log
+tmp/
+
+# iOS 构建产物
+ios/build/
+*.xcframework
