@@ -164,7 +164,11 @@ public final class MainActivity extends Activity {
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == LOGIN_REQ) {
-            Engine.commitPendingLogins(this);
+            // 只有用户点了「完成」才提交；点「取消」/ 返回键时 LoginActivity
+            // 已自行清掉快照，这里绝不能无条件 commit（会凭空多出一个账号）。
+            if (res == RESULT_OK) {
+                Engine.commitPendingLogins(this);
+            }
             web.reload();
         }
     }

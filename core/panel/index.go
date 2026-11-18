@@ -256,6 +256,62 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 }
 .sheet-cancel:active{background:var(--surface-2)}
 
+/* ---------- 表单 / 设置 ---------- */
+.field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.field > label{font-size:12.5px;font-weight:600;color:var(--on-surface-v);padding-left:2px}
+.field input,.field textarea,.field select{
+  width:100%;border:1px solid var(--outline-v);border-radius:var(--r-md);
+  background:var(--surface-1);color:var(--on-surface);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",system-ui,sans-serif;
+  padding:11px 13px;outline:none;
+}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--primary)}
+.field textarea{resize:vertical;min-height:88px}
+.field textarea.mono{
+  font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  min-height:150px;word-break:break-all;
+}
+.field .tip{font-size:11.5px;color:var(--on-surface-v);line-height:1.5;padding-left:2px}
+.row-btns{display:flex;gap:10px;margin:4px 0 10px}
+.row-btns .btn{flex:1}
+.btn.ghost{background:var(--surface-2);color:var(--on-surface);box-shadow:none}
+.btn.danger{background:var(--bad-c);color:var(--bad);box-shadow:none}
+.btn.sm{padding:10px 14px;font-size:13.5px}
+
+/* 账号管理行 */
+.acc-row{
+  display:flex;align-items:center;gap:10px;padding:11px 12px;
+  background:var(--surface-1);border-radius:var(--r-md);margin-bottom:8px;
+}
+.acc-row .dot{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+  color:#fff;font-weight:700;font-size:12px;flex:0 0 auto}
+.acc-row .info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.acc-row .info b{font-size:13.5px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-row .info i{font-style:normal;font-size:11.5px;color:var(--on-surface-v);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-row.off{opacity:.55}
+.mini{
+  border:0;border-radius:var(--r-pill);padding:7px 12px;font-size:12.5px;font-weight:620;
+  background:var(--surface-2);color:var(--on-surface-v);flex:0 0 auto;white-space:nowrap;
+}
+.mini:active{transform:scale(.95)}
+.mini.del{background:var(--bad-c);color:var(--bad)}
+.sect-h{font-size:13px;font-weight:680;color:var(--on-surface-v);
+  margin:18px 4px 10px;letter-spacing:.02em}
+.sect-h:first-child{margin-top:6px}
+.notice{
+  background:var(--warn-c);color:var(--warn);border-radius:var(--r-md);
+  padding:10px 12px;font-size:12.5px;line-height:1.55;margin-bottom:12px;
+}
+.meta{font-size:12px;color:var(--on-surface-v);text-align:center;padding:14px 0 4px}
+/* 卡片右上角的管理入口 */
+.c-more{
+  border:0;background:transparent;color:var(--on-surface-v);
+  width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
+}
+.c-more:active{background:var(--surface-2)}
+.c-more svg{width:18px;height:18px}
+
 /* Snackbar */
 .snack{
   position:fixed;left:50%;bottom:calc(88px + var(--sab));transform:translate(-50%,24px);
@@ -284,6 +340,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     <h1>积分助手</h1>
   </div>
   <button class="iconbtn" id="btnRefresh" aria-label="刷新">{{ICON:refresh}}</button>
+  <button class="iconbtn" id="btnSettings" aria-label="设置">{{ICON:gear}}</button>
 </div>
 
 <div class="hero">
@@ -351,6 +408,106 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     }).then(function(v){ clearTimeout(timer); return v; }, function(e){ clearTimeout(timer); throw e; });
   }
 
+  /* ---------- 通用 UI 工具 ---------- */
+  // POST JSON：账号增删改都走这个，避免每处重复拼 headers
+  function post(url, body){
+    return j(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+  }
+  function el(tag, cls, text){
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function platformName(id){
+    for (var i = 0; i < state.providers.length; i++){
+      if (state.providers[i].id === id) return state.providers[i].name || id;
+    }
+    return id || '';
+  }
+  // 通用底部弹层。build(body, close) 里往 body 塞内容。
+  function openSheet(title, subtitle, build){
+    var mask = el('div', 'mask');
+    var sheet = el('div', 'sheet');
+    sheet.appendChild(el('div', 'sheet-h', title));
+    if (subtitle) sheet.appendChild(el('div', 'sheet-sub', subtitle));
+    var body = el('div', '');
+    sheet.appendChild(body);
+    var cancel = el('button', 'sheet-cancel', '关闭');
+    sheet.appendChild(cancel);
+    document.body.appendChild(mask);
+    document.body.appendChild(sheet);
+    requestAnimationFrame(function(){
+      mask.classList.add('on'); sheet.classList.add('on');
+    });
+    function close(){
+      mask.classList.remove('on'); sheet.classList.remove('on');
+      setTimeout(function(){
+        if (mask.parentNode) mask.parentNode.removeChild(mask);
+        if (sheet.parentNode) sheet.parentNode.removeChild(sheet);
+      }, 240);
+    }
+    mask.addEventListener('click', close);
+    cancel.addEventListener('click', close);
+    if (build) build(body, close);
+    return { el: sheet, body: body, close: close };
+  }
+  // 表单字段：label + 输入框 + 可选说明
+  function mkField(labelText, tag, attrs, tip){
+    var f = el('div', 'field');
+    f.appendChild(el('label', '', labelText));
+    var inp = document.createElement(tag);
+    for (var k in attrs) inp.setAttribute(k, attrs[k]);
+    f.appendChild(inp);
+    if (tip) f.appendChild(el('div', 'tip', tip));
+    return { wrap: f, input: inp };
+  }
+  // 平台下拉
+  function mkPlatformSelect(defaultId){
+    var f = el('div', 'field');
+    f.appendChild(el('label', '', '平台'));
+    var sel = document.createElement('select');
+    (state.providers.length ? state.providers : [{id:'workbuddy',name:'WorkBuddy'}]).forEach(function(p){
+      var o = document.createElement('option');
+      o.value = p.id; o.textContent = p.name || p.id;
+      sel.appendChild(o);
+    });
+    if (defaultId) sel.value = defaultId;
+    f.appendChild(sel);
+    return { wrap: f, input: sel };
+  }
+  // 每行 key=value 的高级字段
+  function parseKV(txt){
+    var out = {};
+    String(txt || '').split(/\n/).forEach(function(line){
+      var m = line.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m) out[m[1]] = m[2];
+    });
+    return out;
+  }
+  // 复制：WKWebView / Android WebView 里 clipboard API 不一定可用，
+  // 用 execCommand 兜底，再不行就提示用户长按全选。
+  function copyText(ta){
+    if (!ta.value){ toast('先生成备份'); return; }
+    var ok = false;
+    try {
+      ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+      ok = document.execCommand('copy');
+    } catch (e) {}
+    if (ok){ toast('已复制到剪贴板'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(ta.value)
+        .then(function(){ toast('已复制到剪贴板'); })
+        .catch(function(){ toast('请长按文本框全选后复制'); });
+    } else {
+      toast('请长按文本框全选后复制');
+    }
+  }
+
   /* ---------- 骨架屏 ---------- */
   function showSkeleton(){
     var frag = document.createDocumentFragment();
@@ -396,6 +553,16 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     s.textContent = r.label || r.account_id || '';
     nm.appendChild(p); nm.appendChild(s);
     top.appendChild(av); top.appendChild(nm);
+    // 卡片右上角的管理入口：用户明确要求「删除入口」，不能藏在设置里
+    var more = document.createElement('button');
+    more.className = 'c-more';
+    more.setAttribute('aria-label', '账号管理');
+    more.innerHTML = ICON('more');
+    more.addEventListener('click', function(e){
+      e.stopPropagation();
+      openAccountMenu(r);
+    });
+    top.appendChild(more);
 
     var bal = document.createElement('div'); bal.className = 'balance';
     var n = document.createElement('span'); n.className = 'n';
@@ -481,9 +648,16 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     if (!silent) showSkeleton();
     return j('/api/providers').then(function(ps){
       state.providers = Array.isArray(ps) ? ps : [];
-      return j('/api/query');
-    }).then(function(rows){
-      state.rows = enrich(Array.isArray(rows) ? rows : []);
+      return Promise.all([j('/api/query'), j('/api/accounts')]);
+    }).then(function(both){
+      var rows = Array.isArray(both[0]) ? both[0] : [];
+      var accts = Array.isArray(both[1]) ? both[1] : [];
+      var enabled = {};
+      for (var i = 0; i < accts.length; i++) enabled[accts[i].account_id] = accts[i].enabled;
+      for (var k = 0; k < rows.length; k++){
+        if (enabled.hasOwnProperty(rows[k].account_id)) rows[k].enabled = enabled[rows[k].account_id];
+      }
+      state.rows = enrich(rows);
       render();
     }).catch(function(e){
       $('list').innerHTML =
@@ -574,84 +748,329 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   });
   $('btnAll').addEventListener('click', checkinAll);
   $('btnAdd').addEventListener('click', openAddSheet);
+  $('btnSettings').addEventListener('click', openSettings);
 
   /* ---------- 添加账号：底部弹层选平台 ---------- */
+  /* ---------- 添加账号：选平台 → 选方式 ---------- */
+  var BRAND = {
+    workbuddy: ['#5B6CFF', '#7B5CFF'],
+    aipy: ['#FF7A3D', '#FF5A5F'],
+    dumate: ['#2F6BFF', '#4C8DFF'],
+    lingxi: ['#12B886', '#0CA678'],
+    trae: ['#FF4D6D', '#E63E8B']
+  };
+
+  // 平台色块 + 首字，不复制官方 logo（避免商标问题），颜色能一眼分辨。
+  function platformRow(p){
+    var row = el('button', 'sheet-item');
+    var dot = el('span', 'sheet-dot');
+    var b = BRAND[p.id];
+    if (b){
+      dot.style.background = 'linear-gradient(135deg,' + b[0] + ',' + b[1] + ')';
+    } else {
+      var hue = hueOf(p.id);
+      dot.style.background = 'linear-gradient(135deg,hsl(' + hue + ',72%,58%),hsl(' + ((hue + 34) % 360) + ',72%,50%))';
+    }
+    dot.textContent = initials(p.name || p.id);
+    var txt = el('span', 'sheet-txt');
+    var t1 = el('b', '', p.name || p.id);
+    var t2 = el('i', '', p.note || '');
+    txt.appendChild(t1); txt.appendChild(t2);
+    var ar = el('span', 'sheet-arw');
+    ar.innerHTML = ICON('arrow');
+    row.appendChild(dot); row.appendChild(txt); row.appendChild(ar);
+    return row;
+  }
+
   function openAddSheet(){
-    var mask = document.createElement('div');
-    mask.className = 'mask';
-    var sheet = document.createElement('div');
-    sheet.className = 'sheet';
-    var head = document.createElement('div');
-    head.className = 'sheet-h';
-    head.textContent = '用官方网页登录';
-    var hint = document.createElement('div');
-    hint.className = 'sheet-sub';
-    hint.textContent = '选一个平台，会在内置浏览器里打开它的官网。登录完返回即可。';
-    sheet.appendChild(head); sheet.appendChild(hint);
-
-    var ps = state.providers.length ? state.providers : [];
-    if (!ps.length){
-      var e = document.createElement('div');
-      e.className = 'sheet-sub';
-      e.textContent = '平台列表加载中，请稍后重试。';
-      sheet.appendChild(e);
-    }
-    // 品牌色：主平台用各自的识别色，其余按 id 稳定取色。
-    // 图标只做色块 + 首字，不复制官方 logo（避免商标问题），但颜色能让人一眼分辨。
-    var BRAND = {
-      workbuddy: ['#5B6CFF', '#7B5CFF'],
-      aipy: ['#FF7A3D', '#FF5A5F'],
-      dumate: ['#2F6BFF', '#4C8DFF'],
-      lingxi: ['#12B886', '#0CA678'],
-      trae: ['#FF4D6D', '#E63E8B']
-    };
-    ps.forEach(function(p){
-      var row = document.createElement('button');
-      row.className = 'sheet-item';
-      var dot = document.createElement('span');
-      dot.className = 'sheet-dot';
-      var b = BRAND[p.id];
-      if (b){
-        dot.style.background = 'linear-gradient(135deg,' + b[0] + ',' + b[1] + ')';
-      } else {
-        var hue = hueOf(p.id);
-        dot.style.background = 'linear-gradient(135deg,hsl(' + hue + ',72%,58%),hsl(' + ((hue + 34) % 360) + ',72%,50%))';
+    openSheet('添加账号', '选平台后可以用网页登录，也可以直接粘贴凭据。', function(body, close){
+      var ps = state.providers.length ? state.providers : [];
+      if (!ps.length){
+        body.appendChild(el('div', 'sheet-sub', '平台列表加载中，请稍后重试。'));
       }
-      dot.textContent = initials(p.name || p.id);
-      var txt = document.createElement('span');
-      txt.className = 'sheet-txt';
-      txt.innerHTML = '<b>' + esc(p.name || p.id) + '</b><i>' + esc(p.note || '') + '</i>';
-      var ar = document.createElement('span');
-      ar.className = 'sheet-arw';
-      ar.innerHTML = ICON('arrow');
-      row.appendChild(dot); row.appendChild(txt); row.appendChild(ar);
-      row.addEventListener('click', function(){
-        dismiss();
-        startLogin(p.id);
+      ps.forEach(function(p){
+        var row = platformRow(p);
+        row.addEventListener('click', function(){
+          close();
+          setTimeout(function(){ openAddMethod(p); }, 260);
+        });
+        body.appendChild(row);
       });
-      sheet.appendChild(row);
+      // 不依赖平台列表、也不依赖网页登录的兜底入口
+      var manual = el('button', 'sheet-cancel', '直接手动粘贴凭据 / 导入备份');
+      manual.addEventListener('click', function(){
+        close();
+        setTimeout(function(){ openSettings(); }, 260);
+      });
+      body.appendChild(manual);
     });
+  }
 
-    var cancel = document.createElement('button');
-    cancel.className = 'sheet-cancel';
-    cancel.textContent = '取消';
-    cancel.addEventListener('click', dismiss);
-    sheet.appendChild(cancel);
+  // 二级：同一个平台，两种添加方式
+  function openAddMethod(p){
+    openSheet(p.name || p.id, '网页登录偶尔会因平台改版抓不到会话；手动粘贴最稳妥。', function(body, close){
+      var web = el('button', 'sheet-item');
+      web.appendChild(el('span', 'sheet-txt', ''));
+      var wt = web.firstChild;
+      wt.appendChild(el('b', '', '网页登录'));
+      wt.appendChild(el('i', '', '在内置浏览器打开官网，登录完点「完成」'));
+      var war = el('span', 'sheet-arw'); war.innerHTML = ICON('arrow');
+      web.appendChild(war);
+      web.addEventListener('click', function(){
+        close();
+        setTimeout(function(){ startLogin(p.id); }, 260);
+      });
+      body.appendChild(web);
 
-    document.body.appendChild(mask);
-    document.body.appendChild(sheet);
-    requestAnimationFrame(function(){
-      mask.classList.add('on'); sheet.classList.add('on');
+      var hand = el('button', 'sheet-item');
+      var ht = el('span', 'sheet-txt');
+      ht.appendChild(el('b', '', '手动粘贴凭据'));
+      ht.appendChild(el('i', '', '粘贴 Cookie / Token，可先试连验证'));
+      hand.appendChild(ht);
+      var har = el('span', 'sheet-arw'); har.innerHTML = ICON('arrow');
+      hand.appendChild(har);
+      hand.addEventListener('click', function(){
+        close();
+        setTimeout(function(){ openManualSheet(p.id); }, 260);
+      });
+      body.appendChild(hand);
     });
-    mask.addEventListener('click', dismiss);
+  }
 
-    function dismiss(){
-      mask.classList.remove('on'); sheet.classList.remove('on');
-      setTimeout(function(){
-        if (mask.parentNode) mask.parentNode.removeChild(mask);
-        if (sheet.parentNode) sheet.parentNode.removeChild(sheet);
-      }, 240);
-    }
+  /* ---------- 手动导入凭据 ---------- */
+  function openManualSheet(providerId){
+    openSheet('手动导入凭据', '从浏览器开发者工具复制 Cookie 或 Token 粘贴进来，不依赖网页登录。', function(body, close){
+      var fProv = mkPlatformSelect(providerId);
+      var fLabel = mkField('备注（选填）', 'input', { type: 'text', placeholder: '例如：主号' });
+      var fCookie = mkField('Cookie', 'textarea', {
+        placeholder: 'session=xxx; uid=xxx', rows: '3'
+      }, '整段粘贴，多个用分号分隔。多数平台填这个就够。');
+      var fToken = mkField('Access Token（选填）', 'input', {
+        type: 'text', placeholder: 'token 型平台填这里'
+      }, 'WorkBuddy 等平台用 token 而不是 Cookie。');
+      var fKV = mkField('其他身份字段（选填）', 'textarea', {
+        placeholder: 'uid=123\nenterprise_id=abc\ntenant_id=xx\ndomain=xxx', rows: '3'
+      }, '每行一个 key=value；不确定就留空。');
+      [fProv.wrap, fLabel.wrap, fCookie.wrap, fToken.wrap, fKV.wrap].forEach(function(w){ body.appendChild(w); });
+
+      var result = el('div', 'sheet-sub', '');
+      result.style.minHeight = '20px';
+      body.appendChild(result);
+
+      function payload(){
+        var d = {
+          provider: fProv.input.value,
+          label: fLabel.input.value.trim(),
+          cookie: fCookie.input.value.trim(),
+          access_token: fToken.input.value.trim()
+        };
+        var kv = parseKV(fKV.input.value);
+        for (var k in kv) d[k] = kv[k];
+        return d;
+      }
+
+      var btns = el('div', 'row-btns');
+      var btnProbe = el('button', 'btn ghost', '验证凭据');
+      var btnSave = el('button', 'btn filled', '保存');
+      btns.appendChild(btnProbe); btns.appendChild(btnSave);
+      body.appendChild(btns);
+
+      btnProbe.addEventListener('click', function(){
+        var d = payload();
+        if (!d.cookie && !d.access_token){ result.textContent = '先填 Cookie 或 Token'; return; }
+        btnProbe.disabled = true; result.textContent = '正在试连…';
+        post('/api/probe', d).then(function(snap){
+          btnProbe.disabled = false;
+          if (snap.error) result.textContent = '验证失败：' + snap.error;
+          else result.textContent = '验证成功：余额 ' + fmt(snap.balance) + ' ' + (snap.unit || '') +
+            (snap.checked_in ? '，今日已签' : '，今日未签');
+        }).catch(function(e){
+          btnProbe.disabled = false; result.textContent = '验证失败：' + e.message;
+        });
+      });
+
+      btnSave.addEventListener('click', function(){
+        var d = payload();
+        if (!d.cookie && !d.access_token){ result.textContent = '先填 Cookie 或 Token'; return; }
+        btnSave.disabled = true; result.textContent = '正在保存…';
+        post('/api/account/add', d).then(function(r){
+          btnSave.disabled = false;
+          if (!r.ok){ result.textContent = '保存失败：' + (r.error || '未知错误'); return; }
+          toast('已添加账号');
+          close();
+          load(true);
+        }).catch(function(e){
+          btnSave.disabled = false; result.textContent = '保存失败：' + e.message;
+        });
+      });
+    });
+  }
+
+  /* ---------- 设置：账号管理 / 备份 / 版本 ---------- */
+  function openSettings(){
+    openSheet('设置', '账号管理、备份导出与导入。', function(body, close){
+      body.appendChild(el('div', 'sect-h', '账号管理'));
+      var accBox = el('div', '');
+      body.appendChild(accBox);
+
+      function refreshAccounts(){
+        j('/api/accounts').then(function(list){
+          accBox.textContent = '';
+          if (!Array.isArray(list) || !list.length){
+            accBox.appendChild(el('div', 'sheet-sub', '还没有账号，点底部「添加账号」。'));
+            return;
+          }
+          list.forEach(function(a){
+            var row = el('div', 'acc-row' + (a.enabled ? '' : ' off'));
+            var dot = el('span', 'dot');
+            var h = hueOf(a.provider);
+            dot.style.background = 'linear-gradient(135deg,hsl(' + h + ',72%,58%),hsl(' + ((h + 34) % 360) + ',72%,50%))';
+            dot.textContent = initials(platformName(a.provider));
+            var info = el('div', 'info');
+            info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
+            info.appendChild(el('i', '', a.account_id));
+            row.appendChild(dot); row.appendChild(info);
+
+            var btnToggle = el('button', 'mini', a.enabled ? '停用' : '启用');
+            btnToggle.addEventListener('click', function(){
+              post('/api/account/toggle', {
+                provider: a.provider, account_id: a.account_id, enabled: !a.enabled
+              }).then(function(r){
+                if (!r.ok){ toast(r.error || '操作失败'); return; }
+                refreshAccounts(); load(true);
+              }).catch(function(e){ toast('操作失败：' + e.message); });
+            });
+            row.appendChild(btnToggle);
+
+            // 二次点击确认：WebView 里 window.confirm 常被吞掉，不能依赖它
+            var armed = false, resetTimer;
+            var btnDel = el('button', 'mini', '删除');
+            btnDel.addEventListener('click', function(){
+              if (!armed){
+                armed = true; btnDel.textContent = '确认删除'; btnDel.classList.add('del');
+                resetTimer = setTimeout(function(){
+                  armed = false; btnDel.textContent = '删除'; btnDel.classList.remove('del');
+                }, 4000);
+                return;
+              }
+              clearTimeout(resetTimer);
+              post('/api/account/delete', { provider: a.provider, account_id: a.account_id })
+                .then(function(r){
+                  if (!r.ok){ toast(r.error || '删除失败'); return; }
+                  toast('已删除账号'); refreshAccounts(); load(true);
+                }).catch(function(e){ toast('删除失败：' + e.message); });
+            });
+            row.appendChild(btnDel);
+            accBox.appendChild(row);
+          });
+        }).catch(function(e){
+          accBox.appendChild(el('div', 'sheet-sub', '读取账号失败：' + e.message));
+        });
+      }
+      refreshAccounts();
+
+      // 手动导入入口（设置页也能直接进）
+      var quick = el('div', 'row-btns');
+      var qAdd = el('button', 'btn ghost', '手动添加凭据');
+      qAdd.addEventListener('click', function(){
+        close(); setTimeout(function(){ openManualSheet(''); }, 260);
+      });
+      quick.appendChild(qAdd);
+      body.appendChild(quick);
+
+      body.appendChild(el('div', 'sect-h', '备份导出'));
+      var notice = el('div', 'notice', '备份里是明文 Cookie / Token，只存本机。别发到聊天、网盘或任何第三方。');
+      body.appendChild(notice);
+      var fExp = mkField('备份内容（可长按全选复制）', 'textarea', {
+        readonly: 'readonly', rows: '6', class: 'mono', placeholder: '点下面的「生成备份」'
+      });
+      // class 属性用 setAttribute 会覆盖 className，这里显式设置
+      fExp.input.className = 'mono';
+      body.appendChild(fExp.wrap);
+      var expBtns = el('div', 'row-btns');
+      var btnExp = el('button', 'btn ghost', '生成备份');
+      var btnCopy = el('button', 'btn ghost', '复制');
+      expBtns.appendChild(btnExp); expBtns.appendChild(btnCopy);
+      body.appendChild(expBtns);
+      btnExp.addEventListener('click', function(){
+        j('/api/export').then(function(d){
+          fExp.input.value = JSON.stringify(d, null, 2);
+          toast('备份已生成');
+        }).catch(function(e){ toast('导出失败：' + e.message); });
+      });
+      btnCopy.addEventListener('click', function(){ copyText(fExp.input); });
+
+      body.appendChild(el('div', 'sect-h', '备份导入'));
+      var fImp = mkField('把备份 JSON 粘贴到这里', 'textarea', {
+        rows: '6', placeholder: '{"version":1,"accounts":[...]}'
+      });
+      fImp.input.className = 'mono';
+      body.appendChild(fImp.wrap);
+      var btnImp = el('button', 'btn filled', '导入备份');
+      btnImp.style.width = '100%';
+      btnImp.addEventListener('click', function(){
+        var txt = fImp.input.value.trim();
+        if (!txt){ toast('先粘贴备份内容'); return; }
+        btnImp.disabled = true;
+        post('/api/import', { text: txt }).then(function(r){
+          btnImp.disabled = false;
+          if (!r.ok){ toast('导入失败：' + (r.error || '未知错误')); return; }
+          toast('导入成功：新增 ' + r.added + (r.skipped ? '，跳过 ' + r.skipped : ''));
+          refreshAccounts(); load(true);
+        }).catch(function(e){
+          btnImp.disabled = false; toast('导入失败：' + e.message);
+        });
+      });
+      body.appendChild(btnImp);
+
+      var meta = el('div', 'meta', '版本 —');
+      body.appendChild(meta);
+      j('/api/meta').then(function(m){
+        meta.textContent = '版本 ' + (m.version || '—') + ' · 已支持 ' + (m.providers || 0) + ' 个平台';
+      }).catch(function(){});
+    });
+  }
+
+  /* ---------- 卡片右上角：单账号操作 ---------- */
+  function openAccountMenu(r){
+    openSheet(platformName(r.provider), r.label || r.account_id || '', function(body, close){
+      var info = el('div', 'sheet-sub', '账号 ID：' + (r.account_id || '—'));
+      body.appendChild(info);
+      var toggle = el('button', 'sheet-item');
+      var tt = el('span', 'sheet-txt');
+      tt.appendChild(el('b', '', r.enabled === false ? '启用此账号' : '停用此账号'));
+      tt.appendChild(el('i', '', '停用后不参与查询与签到，凭据保留'));
+      toggle.appendChild(tt);
+      toggle.addEventListener('click', function(){
+        post('/api/account/toggle', {
+          provider: r.provider, account_id: r.account_id, enabled: r.enabled === false
+        }).then(function(res){
+          if (!res.ok){ toast(res.error || '操作失败'); return; }
+          toast('已更新'); close(); load(true);
+        }).catch(function(e){ toast('操作失败：' + e.message); });
+      });
+      body.appendChild(toggle);
+
+      var del = el('button', 'sheet-item');
+      var dt = el('span', 'sheet-txt');
+      dt.appendChild(el('b', '', '删除账号'));
+      dt.appendChild(el('i', '', '会同时删掉保存的凭据，需要再点一次确认'));
+      del.appendChild(dt);
+      var armed = false;
+      del.addEventListener('click', function(){
+        if (!armed){
+          armed = true; dt.firstChild.textContent = '再点一次确认删除';
+          setTimeout(function(){ armed = false; dt.firstChild.textContent = '删除账号'; }, 4000);
+          return;
+        }
+        post('/api/account/delete', { provider: r.provider, account_id: r.account_id })
+          .then(function(res){
+            if (!res.ok){ toast(res.error || '删除失败'); return; }
+            toast('已删除账号'); close(); load(true);
+          }).catch(function(e){ toast('删除失败：' + e.message); });
+      });
+      body.appendChild(del);
+    });
   }
 
   // 让壳层打开官方登录页。
@@ -740,7 +1159,13 @@ function ICON(name){
     spark:'<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',
     warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none"/>',
     checkAll:'<path d="M1.5 12.5l4.5 4.5 8-9"/><path d="M8.5 16l1.5 1.5 11-12"/>',
-    plus:'<path d="M12 5v14"/><path d="M5 12h14"/>'
+    plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
+    arrow:'<path d="M5 12h13"/><path d="M12.5 5.5L19 12l-6.5 6.5"/>',
+    more:'<circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
+         '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
+         '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
+    refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
+    gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.2M12 19.3v2.2M21.5 12h-2.2M4.7 12H2.5M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6M18.7 18.7l-1.6-1.6M6.9 6.9L5.3 5.3"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
 }

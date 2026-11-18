@@ -64,6 +64,7 @@ func Start(dataDir string) string {
 				Store:    e.store,
 				Reg:      reg,
 				LoginURL: loginURL,
+				Version:  Version,
 			})
 			if err := p.Start(); err == nil {
 				e.panel = p

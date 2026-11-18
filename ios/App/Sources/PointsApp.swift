@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import Combine
 import BackgroundTasks
 import Mobile
 
@@ -71,38 +72,41 @@ struct LoginTarget: Identifiable {
     var id: String { provider }
 }
 
-/// 登录容器包装：底部「完成」与自动识别都可用
+/// 登录容器包装：用户在官方页面登录完，点「完成」才提取 cookie。
+///
+/// 绝不通过改 @State 重建 LoginView 来触发提取——那会新建 WKWebView，
+/// 登录攒下的 cookie 全丢。改为发通知，让同一个 Coordinator 在现有页面取。
 struct LoginSheet: View {
     let provider: String
     var onDone: (String?) -> Void
-    /// 点「完成」时强制提取一次：以新参数重建 LoginView 触发提取
-    @State private var forcedExtract = false
+    @State private var hint = "登录完成后点右上角「完成」"
 
     var body: some View {
         NavigationView {
             Group {
                 if let url = LoginCoordinator.shared.url(for: provider) {
                     LoginView(provider: provider, url: url,
-                              forceExtract: forcedExtract,
                               cookieHost: LoginCoordinator.shared.cookieHost(for: provider) ?? "") { cookies in
                         onDone(cookies)
                     }
-                    .id(forcedExtract)   // 翻转即重建，makeUIViewController 里走强制提取分支
                 } else {
                     Text("未配置登录入口")
                 }
             }
-            .navigationTitle("已登录？点完成")
+            .navigationTitle(hint)
             .navigationBarTitleDisplayMode(.inline)
+            .onReceive(NotificationCenter.default.publisher(
+                for: LoginView.extractFailedNotification)) { _ in
+                hint = "没读到登录信息，请确认已登录后再点「完成」"
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { onDone(nil) }
                 }
-                // 自动收尾有判定条件，个别平台（跳转多、域名特殊）可能识别不到，
-                // 给用户一个明确出口，否则只能取消重来。
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
-                        forcedExtract = true   // 重建 LoginView，用新参数触发强制提取
+                        NotificationCenter.default.post(
+                            name: LoginView.extractNotification, object: nil)
                     }
                 }
             }

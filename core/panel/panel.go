@@ -30,6 +30,8 @@ type Options struct {
 	Reg   *provider.Registry
 	// LoginURL 返回某平台的登录入口（由壳层注入）。为空时面板隐藏「登录」入口。
 	LoginURL func(providerID string) string
+	// Version 由壳层注入，设置页显示，方便确认装的是哪一版。
+	Version string
 }
 
 // Server 是面板实例。
@@ -55,6 +57,15 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/checkin", s.handleCheckin)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
+	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。
+	// 这几条通路完全不依赖平台网页登录，是「添加账号」的可靠兜底。
+	mux.HandleFunc("/api/account/add", s.handleAccountAdd)
+	mux.HandleFunc("/api/account/delete", s.handleAccountDelete)
+	mux.HandleFunc("/api/account/toggle", s.handleAccountToggle)
+	mux.HandleFunc("/api/probe", s.handleProbe)
+	mux.HandleFunc("/api/export", s.handleExport)
+	mux.HandleFunc("/api/import", s.handleImport)
+	mux.HandleFunc("/api/meta", s.handleMeta)
 	// 本地回环服务，但 WebView 里的页面同源可访问：加 Host 校验，挡住 DNS rebinding
 	// （攻击者把域名解析到 127.0.0.1 并从网页里读走账号数据）。
 	s.srv = &http.Server{
