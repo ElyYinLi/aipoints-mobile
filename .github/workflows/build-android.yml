@@ -37,8 +37,7 @@ jobs:
         # x/mobile 最新版要求 go>=1.26，直接 bind 会把引擎的 go 指令一起抬高。
         # 做法分三段，且顺序很关键：
         #   1) 模块模式装二进制；
-        #   2) 把 x/mobile 源码（含 vendor/，其中有 gobind 需要的 x/tools 等）
-        #      铺进 GOPATH/src，并保留 x/mobile 自己的 go.mod——
+        #   2) 把 x/mobile 源码铺进 GOPATH/src，并保留它自己的 go.mod——
         #      gomobile 二进制运行时会在子进程里重新 `go install gobind`，
         #      子进程继承 GO111MODULE=off 时若 GOPATH 下是「无 go.mod 的源码树」
         #      会直接报 "modules disabled by GO111MODULE=off"（上一版就死在这）。
@@ -62,7 +61,7 @@ jobs:
           chmod -R u+w "$GP/src/golang.org/x/mobile"
           # 不能删 go.mod：gomobile 跑起来时会自己把 GO111MODULE 设成 off 并重装
           # gobind，GOPATH 下若是「无 go.mod 的裸源码树」会报 modules disabled。
-          ls "$GP/src/golang.org/x/mobile/vendor/golang.org/x/tools" >/dev/null
+          ls "$GP/src/golang.org/x/mobile/bind" >/dev/null
           gomobile init
           echo "gomobile: $(command -v gomobile)"
 

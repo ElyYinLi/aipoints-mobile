@@ -62,7 +62,7 @@ jobs:
           rm -rf "$GP/src/golang.org/x/mobile"
           cp -r "$SRC" "$GP/src/golang.org/x/mobile"
           chmod -R u+w "$GP/src/golang.org/x/mobile"
-          ls "$GP/src/golang.org/x/mobile/vendor/golang.org/x/tools" >/dev/null
+          ls "$GP/src/golang.org/x/mobile/bind" >/dev/null
           gomobile init
           echo "$GP/bin" >> "$GITHUB_PATH"
 
