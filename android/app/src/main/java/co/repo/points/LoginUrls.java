@@ -13,11 +13,13 @@ final class LoginUrls {
     static String forProvider(String id) {
         switch (id == null ? "" : id) {
             case "workbuddy":
-                return "https://www.workbuddy.cn/";
+                // token 型：本机 302 到官方 OAuth 授权页，登录完由引擎轮询换 token
+                return "http://127.0.0.1:7879/login/workbuddy";
             case "lingxi":
                 return "https://www.kdocs.cn/";
             case "dumate":
-                return "https://wenxin.baidu.com/";
+                // 业务站是 dumate.baidu.com；wenxin.baidu.com 是文心一言，没有登录入口
+                return "https://dumate.baidu.com/";
             case "trae":
                 return "https://www.trae.cn/";
             case "aipy":

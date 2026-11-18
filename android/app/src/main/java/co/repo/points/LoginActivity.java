@@ -135,11 +135,16 @@ public final class LoginActivity extends Activity {
         }
         String url = (web != null && web.getUrl() != null) ? web.getUrl() : startUrl;
         String ck = CookieJar.domainCookies(url);
-        if (ck == null || !ck.contains("=")) {
+        // WorkBuddy 走官方 OAuth：access token 由引擎轮询换取，与 cookie 无关，
+        // 授权页可能一个会话 cookie 都不留，不能因此把用户拦下。
+        boolean oauth = "workbuddy".equals(provider);
+        if (!oauth && (ck == null || !ck.contains("="))) {
             Toast.makeText(this, "没读到登录信息，请确认已登录后再点「完成」", Toast.LENGTH_LONG).show();
             return;
         }
-        CookieJar.remember(this, provider, url, ck);
+        if (ck != null && ck.contains("=")) {
+            CookieJar.remember(this, provider, url, ck);
+        }
         setResult(RESULT_OK, new Intent());
         finish();
     }

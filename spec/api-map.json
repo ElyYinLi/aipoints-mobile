@@ -35,7 +35,7 @@
       "id": "workbuddy",
       "name": "WorkBuddy (CodeBuddy)",
       "auth": "browser_oauth_state_poll | refresh_token | local_client_encrypted_token",
-      "auth_detail": "官方浏览器 OAuth: /v2/plugin/auth/state -> authUrl -> poll /v2/plugin/auth/token; refresh: /v2/plugin/auth/token/refresh; 账号资料: /v2/plugin/login/account",
+      "auth_detail": "官方浏览器 OAuth（2026-11-18 实测）：POST /v2/plugin/auth/state?platform=workbuddy 只带 X-No-Authorization: true 即返回 {state, authUrl=https://www.workbuddy.cn/login?platform=workbuddy&state=...}；若再补 X-User-Id/X-Enterprise-Id/X-Department-Info: true 会 403 enterprise not found（字面量 true 被当成真实企业 ID）。未授权轮询 GET /v2/plugin/auth/token?state= 返回 code 11217 login ing...；授权后 data 内是 access_token/refresh_token。账号资料 GET /v2/plugin/login/account?state= 需 Bearer。网页登录不会产生可用 token，必须走这条链路。",
       "local_credential_encryption": "AES-256-GCM envelope; key=atRestSecretKey(44-char base64, 仅客户端进程内存); key=SHA256(secret); keyId=SHA256(key)[:16]",
       "endpoints": [
         {
@@ -282,7 +282,7 @@
           "body": "{\"task_type\":\"...\"}"
         }
       ],
-      "notes": "信封为 {success,message,data}；重复签到时 success=false 且文案含「已签到」；额度口径 500000 = 1 单位",
+      "notes": "信封为 {success,message,data}。字段实测（types.go）：已签是 checked_in_today（写成 checked_in 永远读不到，表现为签完仍显示未签到）；余额只在 /api/user/self 的 User.Quota，checkin/status 没有该字段；单位是灵石，灵石 = 额度 ÷ 5000（quota_per_unit=500000、stones_per_unit=100）。重复签到 success=false 且文案含「已签到」。",
       "mobile": "ok"
     },
     {
@@ -322,6 +322,8 @@
         "x-bce-request-id (写接口)"
       ],
       "origin": "移植自 totorosir-dumate-checkin v1.1.0",
+      "login_url": "https://dumate.baidu.com/",
+      "login_note": "登录入口在 dumate.baidu.com 首页「立即登录」；wenxin.baidu.com 是文心一言，页面里没有任何搭子登录入口（曾误用导致用户找不到）。",
       "mobile": {
         "feasible": true,
         "reason": "纯 cookie + REST，WebView 登录百度账号即可"

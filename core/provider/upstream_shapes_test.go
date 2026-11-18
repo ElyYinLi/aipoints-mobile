@@ -153,20 +153,20 @@ func TestDigAnyEnvelope(t *testing.T) {
 	}
 }
 
-// TestAiPyQuotaUnit AiPy 的额度口径是 500000=1，换算错了显示会差五个数量级。
+// TestAiPyQuotaUnit AiPy 的灵石口径是「额度 ÷ 5000」，换算错了显示会差几个数量级。
 func TestAiPyQuotaUnit(t *testing.T) {
 	url, done := stub(t, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"success": true, "data": map[string]any{"checked_in": false, "quota": 2500000}})
+		writeJSON(w, map[string]any{"success": true, "data": map[string]any{"checked_in_today": false, "quota": 2500000}})
 	})
 	defer done()
 
 	p := NewAiPy(httpx.New())
 	snap, _ := p.Query(context.Background(), Credential{AccountID: "a", Cookie: "x=1", Domain: url})
-	if snap.Balance != 5 {
-		t.Fatalf("2500000 额度应为 5 单位，实际 %v", snap.Balance)
+	if snap.Balance != 500 {
+		t.Fatalf("2500000 额度应为 500 灵石，实际 %v", snap.Balance)
 	}
-	if snap.Unit != "点数" {
-		t.Fatalf("单位应为点数，实际 %q", snap.Unit)
+	if snap.Unit != "灵石" {
+		t.Fatalf("单位应为灵石，实际 %q", snap.Unit)
 	}
 }
 

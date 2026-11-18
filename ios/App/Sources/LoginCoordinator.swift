@@ -13,11 +13,15 @@ final class LoginCoordinator: ObservableObject {
     @Published var pendingProvider: String?
 
     private let urls: [String: String] = [
-        "workbuddy": "https://www.workbuddy.cn/",
+        // WorkBuddy 是 token 型，网页登录拿不到 token。指向本机 302，
+        // 由 Go 引擎现取官方 OAuth authUrl 再跳转，登录完轮询换 token。
+        "workbuddy": "http://127.0.0.1:7879/login/workbuddy",
         "lingxi":    "https://www.kdocs.cn/",
-        "dumate":    "https://wenxin.baidu.com/",
-        "trae":      "https://www.trae.cn/",
-        "aipy":      "https://www.trustoken.cn/",
+        // 百度搭子业务站是 dumate.baidu.com；wenxin.baidu.com 是文心一言，
+        // 页面上根本没有搭子的登录入口（用户实测找不到）。
+        "dumate": "https://dumate.baidu.com/",
+        "trae":   "https://www.trae.cn/",
+        "aipy":   "https://www.trustoken.cn/",
     ]
 
     /// 登录成功后 cookie 所在的站点。与 urls 分开，是因为有些平台的登录

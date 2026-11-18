@@ -38,6 +38,10 @@ type Options struct {
 type Server struct {
 	opt Options
 	srv *http.Server
+	// oauth 保存进行中的 WorkBuddy OAuth state（内存态，进程结束即丢）。
+	// key 是平台 id，value 是服务端签发的一次性 state。
+	oauthMu sync.Mutex
+	oauth   map[string]oauthPending
 }
 
 // New 构造面板。
@@ -48,7 +52,7 @@ func New(opt Options) *Server {
 	if opt.Reg == nil {
 		opt.Reg = provider.NewRegistry(httpx.New())
 	}
-	s := &Server{opt: opt}
+	s := &Server{opt: opt, oauth: make(map[string]oauthPending)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/providers", s.handleProviders)
@@ -66,6 +70,13 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/meta", s.handleMeta)
+	// WorkBuddy 的 OAuth 通路：
+	//   /login/workbuddy   → 302 到官方 authUrl（壳层直接加载这个地址）
+	//   /api/oauth/start   → 同上，但返回 JSON，给面板自绘流程用
+	//   /api/oauth/finish  → 轮询换 token 并落库（用户点「完成」后调用）
+	mux.HandleFunc("/login/", s.handleLoginRedirect)
+	mux.HandleFunc("/api/oauth/start", s.handleOAuthStart)
+	mux.HandleFunc("/api/oauth/finish", s.handleOAuthFinish)
 	// 本地回环服务，但 WebView 里的页面同源可访问：加 Host 校验，挡住 DNS rebinding
 	// （攻击者把域名解析到 127.0.0.1 并从网页里读走账号数据）。
 	s.srv = &http.Server{

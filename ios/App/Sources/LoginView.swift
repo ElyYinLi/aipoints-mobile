@@ -74,6 +74,13 @@ struct LoginView: UIViewControllerRepresentable {
             guard !settled else { return }
             extractNow { [weak self] cookies in
                 guard let self else { return }
+                // WorkBuddy 走官方 OAuth：token 由引擎轮询换取，与 cookie 无关。
+                // 它的授权页可能一个会话 cookie 都不留，此时也必须放行，
+                // 否则用户永远卡在「没读到登录信息」。
+                if self.parent.provider == "workbuddy" {
+                    self.finish(cookies)
+                    return
+                }
                 guard let cookies, !cookies.isEmpty else {
                     NotificationCenter.default.post(name: LoginView.extractFailedNotification, object: nil)
                     return

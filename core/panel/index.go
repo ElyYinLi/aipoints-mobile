@@ -607,10 +607,13 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         if (unit && unit !== u) unit = '合计'; else unit = u;
       }
     }
-    // 全异常或没有账号时显示「—」而不是 0：0 会被误读成「余额为零」
-    $('total').textContent = (!rows.length || !healthy) ? '—' : fmt(total);
+    // 全异常或没有账号时显示「—」而不是 0：0 会被误读成「余额为零」。
+    // 多家单位不同（灵石 / 积分）时也不能相加，直接显示「—」，否则 100 灵石 +
+    // 12.5 积分 会变成一个没有任何含义的 112.5。
+    var mixed = (unit === '合计');
+    $('total').textContent = (!rows.length || !healthy || mixed) ? '—' : fmt(total);
     var tu = $('total-unit');
-    if (tu) tu.textContent = (unit === '合计') ? '' : (unit || '积分');
+    if (tu) tu.textContent = mixed ? '' : (unit || '积分');
     renderChips(rows);
 
     if (!rows.length){
@@ -673,7 +676,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         var r = Array.isArray(res) ? res[0] : res;
         if (r && r.error){ toast(r.error); }
         else if (r && r.already){ toast('今天已经签过了'); }
-        else if (r && r.ok){ toast('签到成功' + (r.gain ? '，+' + fmt(r.gain) + ' 积分' : '')); }
+        else if (r && r.ok){ toast('签到成功' + (r.gain ? '，+' + fmt(r.gain) + ' ' + (r.unit || '积分') : '')); }
         else { toast('签到未成功'); }
         return load(true);
       })
@@ -1077,6 +1080,15 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   // Android: WebView.addJavascriptInterface 注入 window.PointsBridge.openLogin(id)
   // iOS:     WKScriptMessageHandler 同名；都不可用时退回自定义 scheme
   function startLogin(providerId){
+    // 记账必须放在任何 return 之前：原先写在函数末尾，iOS / Android 走桥时
+    // 会提前 return，时间戳根本没写上，resumeAfterLogin 于是什么都不做。
+    loginPendingAt = Date.now();
+    // WorkBuddy 要 OAuth：标记持久化到 localStorage，壳层 reload（页面重载）
+    // 之后内存变量会丢，只有存下来才能续上换取 token 的流程。
+    try {
+      if (providerId === 'workbuddy') localStorage.setItem('oauth_pending', 'workbuddy');
+      else localStorage.removeItem('oauth_pending');
+    } catch (e) {}
     // 三条通路，按可用性依次尝试：
     // 1) iOS：WKScriptMessageHandler，需要 postMessage 形式
     try {
@@ -1094,11 +1106,6 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     } catch (e) {}
     // 3) 兜底：自定义 scheme，两端 WebViewClient / navigationDelegate 都会拦
     location.href = 'points://login?provider=' + encodeURIComponent(providerId);
-
-    // 壳层未必会 reload（例如 iOS 只 dismiss 了登录页）。登录回到前台时若
-    // 既不 reload 也不发信号，页面就永远看不到新账号——这是「加完账号没反应」的根因。
-    // 这里记一个时间戳，配合 pageshow / visibilitychange 做兜底重查。
-    loginPendingAt = Date.now();
   }
 
   /* ---------- 对外暴露给壳层：打开即签到 ---------- */
@@ -1109,9 +1116,39 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   var autoTask = null;
   var loginPendingAt = 0;
 
+  // finishOAuth：WorkBuddy 这类 token 型平台，登录完成只是第一步，
+  // 还要让引擎拿一次性 state 去上游换 access token。
+  // 后端每次只查一次（避免长连接被 25s 超时打断），等待时前端隔 2.5s 再来。
+  function finishOAuth(provider){
+    var tries = 0;
+    toast('正在换取登录凭证…');
+    function tick(){
+      tries++;
+      post('/api/oauth/finish', { provider: provider }).then(function(r){
+        if (r && r.ok){
+          toast('账号已添加' + (r.nickname ? '：' + r.nickname : ''));
+          load(true);
+          return;
+        }
+        if (r && r.waiting && tries < 24){ setTimeout(tick, 2500); return; }
+        toast((r && r.error) || '登录未完成，请重试');
+      }).catch(function(e){ toast('登录失败：' + e.message); });
+    }
+    tick();
+  }
+
   // resumeAfterLogin：登录容器关闭后回到前台时调用。
   // 只要距上次发起登录不到 10 分钟，就重新拉一次数据（新增账号会立刻出现）。
   function resumeAfterLogin(){
+    // OAuth 型平台优先：登录完成 ≠ 拿到 token，必须再走一次换取流程
+    var pend = '';
+    try { pend = localStorage.getItem('oauth_pending') || ''; } catch (e) {}
+    if (pend === 'workbuddy'){
+      try { localStorage.removeItem('oauth_pending'); } catch (e) {}
+      loginPendingAt = 0;
+      finishOAuth('workbuddy');
+      return;
+    }
     if (!loginPendingAt) return;
     if (Date.now() - loginPendingAt > 10 * 60 * 1000) { loginPendingAt = 0; return; }
     loginPendingAt = 0;
@@ -1142,6 +1179,16 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   /* ---------- 启动 ---------- */
   showSkeleton();
   load(true);
+  // 壳层在 WorkBuddy 登录后会 reload 本页，内存变量清零：
+  // 从 localStorage 认出「上次是去登录 WorkBuddy」，把换取 token 的流程续上。
+  (function(){
+    var pend = '';
+    try { pend = localStorage.getItem('oauth_pending') || ''; } catch (e) {}
+    if (pend === 'workbuddy'){
+      try { localStorage.removeItem('oauth_pending'); } catch (e) {}
+      finishOAuth('workbuddy');
+    }
+  })();
   // 页面从后台回到前台时自动刷新 + 自动签到（用户「打开软件即签到」的核心诉求）
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState !== 'visible') return;

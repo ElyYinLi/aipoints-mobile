@@ -30,7 +30,7 @@ import (
 )
 
 // Version 由壳层显示，构建时可通过 -ldflags 注入。
-var Version = "0.1.0-dev"
+var Version = "0.3.2"
 
 type engine struct {
 	mu     sync.Mutex
@@ -298,11 +298,15 @@ func errJSON(msg string) string {
 // 原则：一律打开平台自己的登录页，不自己实现账号密码表单——
 // 密码只流向平台，我们不接触；平台改登录流程也不用跟着改。
 var loginURLs = map[string]string{
-	"workbuddy": "https://www.workbuddy.cn/",
+	// WorkBuddy 是 token 型：网页登录拿不到 access token，必须走官方 OAuth
+	// （POST /v2/plugin/auth/state → authUrl → 轮询 /v2/plugin/auth/token）。
+	// 这里指向本机 302 端点，由引擎实时换取 authUrl 再跳转。
+	"workbuddy": "http://127.0.0.1:7879/login/workbuddy",
 	"lingxi":    "https://www.kdocs.cn/",
-	"dumate":    "https://wenxin.baidu.com/",
-	"trae":      "https://www.trae.cn/",
-	"aipy":      "https://www.trustoken.cn/",
+	// 业务站在 dumate.baidu.com；wenxin.baidu.com 是文心一言，页面上没有搭子登录入口。
+	"dumate": "https://dumate.baidu.com/",
+	"trae":   "https://www.trae.cn/",
+	"aipy":   "https://www.trustoken.cn/",
 }
 
 // loginURL 供面板查询某平台的登录入口。

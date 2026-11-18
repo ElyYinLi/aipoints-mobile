@@ -64,8 +64,10 @@ type Result struct {
 	OK        bool    `json:"ok"`
 	Already   bool    `json:"already"`
 	Gain      float64 `json:"gain,omitempty"`
-	Message   string  `json:"message,omitempty"`
-	Error     string  `json:"error,omitempty"`
+	// Unit 是本次奖励的单位文案（灵石 / 积分 / 点）。空表示沿用平台默认口径。
+	Unit    string `json:"unit,omitempty"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Meta 描述一个平台的元信息，供 UI 渲染与能力判断。
