@@ -1,6 +1,6 @@
 # aipy-mobile
 
-把桌面版「AI 积分助手」的签到能力搬到手机上，**iOS + Android 双端原生**，自用、不发布。
+把桌面版「AI 积分助手」的签到能力搬到手机上，**iOS + Android 双端原生**。
 
 ## 这是什么
 
@@ -25,7 +25,7 @@ core/                 Go 引擎（唯一有业务逻辑的地方）
 android/              极薄 Java 壳：WebView + 登录容器 + 前台服务
 ios/                  SwiftUI + WKWebView + Keychain
 spec/api-map.json     逆向得到的接口地图（机器可读）
-.github/workflows/    Android 用 Linux runner，iOS 用 macOS runner（手动触发）
+.github/workflows/    Android 用 Linux runner，iOS 用 macOS runner（均出可安装产物）
 ```
 
 ## 本地跑（不需要手机）

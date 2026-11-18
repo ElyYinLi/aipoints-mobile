@@ -1,23 +1,18 @@
 name: build-ios
 
-# ⚠️ 配额说明（很重要）
-# GitHub Free 私有仓库每月 2000 分钟。macOS runner 按 **10× 倍率** 计费，
-# 也就是每月只有 **200 分钟** 的 macOS 构建时间。一次完整 iOS 构建约 6-10 分钟，
-# 所以每月大约 20 次构建。
-#
-# 因此这里刻意 **不在 push 时触发**，只保留 workflow_dispatch 手动触发：
-#   Actions → build-ios → Run workflow
-# 想临时放开自动构建，把下面注释掉的 push 段打开即可，但要盯着额度。
+# 公开仓库下 macOS runner 也免费，不受额度限制（私有仓库才是 $0.062/分钟）。
+# 但 iOS 构建耗时约 6-10 分钟且改动集中在 core/ 也会触发，所以仍然只做手动触发 +
+# 路径变更自动触发，避免每次改 README 都跑一遍。
 on:
-  # push:
-  #   branches: [main]
-  #   paths: ['core/**', 'ios/**']
   workflow_dispatch:
     inputs:
       make_ipa:
         description: '同时打包自签 IPA'
         type: boolean
         default: true
+  push:
+    branches: [main]
+    paths: ['ios/**', 'core/mobile/**', 'core/provider/**']
 
 jobs:
   build:
@@ -43,13 +38,13 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
 
       - name: 构建 xcframework + .app + .ipa
-        if: ${{ inputs.make_ipa }}
+        if: ${{ github.event_name == 'push' || inputs.make_ipa }}
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
           bash ios/build-ipa.sh
 
       - name: 仅验证 gomobile bind（不打包，省时间）
-        if: ${{ !inputs.make_ipa }}
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.make_ipa }}
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
           go install golang.org/x/mobile/cmd/gomobile@latest
@@ -59,7 +54,7 @@ jobs:
           ls -la /tmp/Mobile.xcframework
 
       - uses: actions/upload-artifact@v4
-        if: ${{ inputs.make_ipa }}
+        if: ${{ github.event_name == 'push' || inputs.make_ipa }}
         with:
           name: points-ipa
           path: ios/build/Points.ipa

@@ -1,7 +1,7 @@
 name: build-android
 
-# Android 构建放 Linux runner：免费额度按 1× 计费，一次约 5-8 分钟。
-# iOS 构建必须 macOS（10× 计费），所以拆成两个 workflow，且 iOS 默认手动触发。
+# 仓库是公开的：标准托管 runner（Linux / macOS）在公开仓库下**完全免费**，
+# 不消耗账号额度，所以每次 push 都能自动构建，iOS 也可以随便跑。
 on:
   push:
     branches: [main]
@@ -57,6 +57,23 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" > /dev/null
+
+      - name: 还原签名密钥
+        # 密钥不进公开仓库，从 Actions Secret 还原。
+        # 缺 Secret 时构建仍会成功，但产出的是新密钥签名的包，覆盖安装会失败。
+        env:
+          KS_B64: ${{ secrets.POINTS_KEYSTORE_B64 }}
+        run: |
+          mkdir -p android/signing
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > android/signing/points.jks
+            echo "已从 Secret 还原签名密钥"
+          else
+            echo "::warning::缺少 POINTS_KEYSTORE_B64，将使用临时密钥签名，产物不能覆盖安装"
+            keytool -genkeypair -keystore android/signing/points.jks -storepass points2024 \
+              -keypass points2024 -alias points -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Points, OU=Self, O=Self, L=Local, C=CN"
+          fi
 
       - name: 构建 APK
         env:
