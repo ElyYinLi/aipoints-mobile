@@ -49,12 +49,32 @@ func (d *Dumate) base(c Credential) string {
 }
 
 func (d *Dumate) headers(c Credential) map[string]string {
-	return map[string]string{
+	h := map[string]string{
 		"Cookie":     c.Cookie,
 		"Origin":     d.base(c),
 		"Referer":    d.base(c) + "/app",
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	}
+	// 关键：写接口必须带 csrftoken 头，值取自 bce-user-info cookie（去掉首尾引号）。
+	// 缺它时服务端会拒绝，且错误信息不直观（容易被当成 cookie 失效）。
+	if tok := csrfFromCookie(c.Cookie); tok != "" {
+		h["csrftoken"] = tok
+	}
+	return h
+}
+
+// csrfFromCookie 从 cookie 串里取 bce-user-info 的值作为 csrftoken。
+// cookie 形如：a=1; bce-user-info="%7B%22token%22%3A...%22%7D"; c=2
+func csrfFromCookie(cookie string) string {
+	for _, part := range strings.Split(cookie, ";") {
+		part = strings.TrimSpace(part)
+		name, value, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(name) != "bce-user-info" {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return ""
 }
 
 // Query 读签到状态 + 可用积分。

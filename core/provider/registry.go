@@ -13,19 +13,20 @@ type Registry struct {
 	m  map[string]Provider
 }
 
-// NewRegistry 构造默认注册表（当前先接入三家可验证的平台）。
+// NewRegistry 构造默认注册表（已接入五家）。
 //
-// 未接入的原因写在 spec/api-map.json 的 mobile 字段里：
-//   - trae      httpOnly cookie → 需要 WebView 取 JWT，壳层就绪后再加
-//   - minimax   签名头盐值未确认（需真实 token 反推）
-//   - doubao    只能页面自动化，需要 WebView 驱动
-//   - qoder     桌面端指纹 runtime-info.exe，移动端无解
+// 未接入/放弃的原因写在 spec/api-map.json 的 mobile 字段里：
+//   - minimax   签名头盐值未确认（需真实 token 反推），暂时放弃
+//   - doubao    只能页面自动化，需要 WebView 驱动，收益低于成本，放弃
+//   - qoder     领取依赖桌面端 runtime-info.exe 指纹，移动端无解，放弃
 func NewRegistry(c *httpx.Client) *Registry {
 	r := &Registry{m: make(map[string]Provider)}
 	for _, p := range []Provider{
 		NewWorkBuddy(c),
-		NewLingxi(c),
+		NewAiPy(c),
 		NewDumate(c),
+		NewLingxi(c),
+		NewTrae(c),
 	} {
 		r.m[p.Meta().ID] = p
 	}

@@ -2,9 +2,7 @@ name: core-ci
 
 on:
   push:
-    paths: ["core/**", ".github/workflows/core-ci.yml"]
   pull_request:
-    paths: ["core/**"]
   workflow_dispatch:
 
 jobs:
@@ -22,6 +20,8 @@ jobs:
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then echo "以下文件未格式化:"; echo "$out"; exit 1; fi
+      - name: 密钥扫描（含令牌/私钥一律拒绝）
+        run: python3 tools/check_secrets.py .
       - name: go vet
         working-directory: core
         run: go vet ./...

@@ -6,6 +6,7 @@
 //	pointsctl query   -provider workbuddy -token $WB_TOKEN -uid u123
 //	pointsctl query   -provider lingxi   -cookie "$KDOCS_COOKIE"
 //	pointsctl checkin -provider dumate   -cookie "$BAIDU_COOKIE"
+//	pointsctl checkin -provider aipy     -cookie "$TRUSTOKEN_COOKIE"
 //
 // 所有输出默认是人类可读；加 -json 输出机器可读 JSON（便于管道与断言）。
 package main
@@ -27,7 +28,7 @@ import (
 func main() {
 	var (
 		action     = flag.String("action", "query", "query | checkin | providers")
-		providerID = flag.String("provider", "", "平台 id: workbuddy | lingxi | dumate")
+		providerID = flag.String("provider", "", "平台 id: workbuddy | lingxi | dumate | trae | aipy")
 		token      = flag.String("token", "", "access token（token 型平台）")
 		cookie     = flag.String("cookie", "", "cookie 串（cookie 型平台）")
 		uid        = flag.String("uid", "", "X-User-Id（WorkBuddy）")

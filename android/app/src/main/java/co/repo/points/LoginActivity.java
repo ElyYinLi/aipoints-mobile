@@ -61,16 +61,45 @@ public final class LoginActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView v, String u) {
-                // 每次页面加载完成就探测一次：很多平台登录成功后会跳到工作台，
-                // 此时 cookie 已经就位，不必等用户手动点「完成」。
-                String cookies = CookieJar.dump(u);
-                if (cookies != null && cookies.contains("=") && cookies.length() > 40) {
-                    CookieJar.remember(LoginActivity.this, provider, u, cookies);
+                // 每次页面加载完成都探测：多数平台登录成功会跳到工作台，
+                // 此时 cookie 已就位，不必等用户手动返回。
+                String cookies = CookieJar.domainCookies(u);
+                if (cookies == null || !cookies.contains("=")) {
+                    return;
+                }
+                CookieJar.remember(LoginActivity.this, provider, u, cookies);
+                // 判定条件：cookie 够长且不再停在登录域名上，说明已进入应用内
+                if (cookies.length() > 120 && looksLoggedIn(u)) {
+                    done();
                 }
             }
         });
 
         web.loadUrl(url);
+    }
+
+    /** 登录页的域名里带 login/passport 说明还没进去。 */
+    private static boolean looksLoggedIn(String url) {
+        if (url == null) {
+            return false;
+        }
+        String u = url.toLowerCase();
+        return !(u.contains("/login") || u.contains("passport") || u.contains("/signin"));
+    }
+
+    private void done() {
+        if (isFinishing()) {
+            return;
+        }
+        // 只回传本次登录站点的 cookie：多站点混拼会串号，引擎也无法判断该用哪一段。
+        String provider = getIntent().getStringExtra(EXTRA_PROVIDER);
+        String url = getIntent().getStringExtra(EXTRA_URL);
+        String ck = CookieJar.domainCookies(url);
+        if (ck != null && ck.contains("=")) {
+            CookieJar.remember(this, provider, "", ck);
+        }
+        setResult(RESULT_OK, new Intent());
+        finish();
     }
 
     @Override
@@ -79,8 +108,7 @@ public final class LoginActivity extends Activity {
             web.goBack();
         } else {
             // 返回即视为「登录完成」，由 MainActivity 取最新 cookie 落库
-            setResult(RESULT_OK, new Intent());
-            finish();
+            done();
         }
     }
 

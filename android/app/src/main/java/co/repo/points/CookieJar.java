@@ -2,6 +2,7 @@ package co.repo.points;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.webkit.CookieManager;
 
 /**
@@ -30,11 +31,62 @@ final class CookieJar {
         }
     }
 
-    /** 把所有域下的 cookie 一次性导出（部分平台跨域，单 URL 取不全）。 */
+    /**
+     * 把所有已接入域下的 cookie 一次性导出。
+     *
+     * 关键点：多个站点的 cookie 绝不能简单用 "; " 拼在一起——不同站点常出现同名项
+     * （session、uid 之类），拼完再整体发给某一个站点，会把别的站点的值一起送出去，
+     * 既可能串号，也可能让服务端取到错误的值。这里按域名分组，用换行分隔，
+     * 由 engine 侧只挑目标域命中的那一组使用。
+     */
     static String dumpAll() {
         try {
             CookieManager cm = CookieManager.getInstance();
-            return cm.getCookie(".workbuddy.cn") + "; " + cm.getCookie(".kdocs.cn") + "; " + cm.getCookie(".baidu.com");
+            StringBuilder sb = new StringBuilder();
+            for (String domain : DOMAINS) {
+                String ck = cm.getCookie(domain);
+                if (ck == null || !ck.contains("=")) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append("\n");
+                }
+                sb.append(domain).append(" ").append(ck);
+            }
+            return sb.length() == 0 ? null : sb.toString();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 全部已接入平台的 cookie 域，新增平台只改这里。 */
+    static final String[] DOMAINS = {
+            ".workbuddy.cn",
+            ".kdocs.cn",
+            ".baidu.com",
+            ".trae.cn",
+            ".trustoken.cn",
+    };
+
+    /** 取单个域当前的 cookie 串（登录页每加载完成时调用）。 */
+    static String domainCookies(String url) {
+        try {
+            Uri u = Uri.parse(url);
+            String host = u.getHost();
+            if (host == null) {
+                return dump(url);
+            }
+            // 顶级域 + 父域都试一遍：cookie 的 Domain 属性可能落在任一层级
+            String ck = CookieManager.getInstance().getCookie(host);
+            int dot = host.indexOf('.');
+            if (dot > 0) {
+                String parent = host.substring(dot);
+                String ck2 = CookieManager.getInstance().getCookie(parent);
+                if (ck2 != null && !ck2.isEmpty()) {
+                    ck = (ck == null || ck.isEmpty()) ? ck2 : ck + "; " + ck2;
+                }
+            }
+            return ck;
         } catch (Throwable t) {
             return null;
         }

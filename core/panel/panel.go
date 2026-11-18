@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
@@ -27,6 +28,8 @@ type Options struct {
 	Addr  string // 默认 127.0.0.1:7879
 	Store store.Store
 	Reg   *provider.Registry
+	// LoginURL 返回某平台的登录入口（由壳层注入）。为空时面板隐藏「登录」入口。
+	LoginURL func(providerID string) string
 }
 
 // Server 是面板实例。
@@ -50,8 +53,38 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/query", s.handleQuery)
 	mux.HandleFunc("/api/checkin", s.handleCheckin)
-	s.srv = &http.Server{Addr: opt.Addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	mux.HandleFunc("/api/login/start", s.handleLoginStart)
+	mux.HandleFunc("/api/health", s.handleHealth)
+	// 本地回环服务，但 WebView 里的页面同源可访问：加 Host 校验，挡住 DNS rebinding
+	// （攻击者把域名解析到 127.0.0.1 并从网页里读走账号数据）。
+	s.srv = &http.Server{
+		Addr:              opt.Addr,
+		Handler:           loopbackOnly(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+	}
 	return s
+}
+
+// loopbackOnly 只接受 Host 为回环地址的请求。
+//
+// 为什么需要：服务只监听 127.0.0.1，但浏览器里任何网页都能向 127.0.0.1 发请求。
+// DNS rebinding 能让攻击者域名解析到本机，从而读到 /api/query 里的账号信息。
+// 校验 Host 头即可挡住这类请求（WebView 加载的是 127.0.0.1:port，Host 必然匹配）。
+func loopbackOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		switch host {
+		case "127.0.0.1", "localhost", "::1", "[::1]":
+			next.ServeHTTP(w, r)
+		default:
+			http.Error(w, "forbidden host", http.StatusForbidden)
+		}
+	})
 }
 
 // Start 在后台启动，立即返回。端口被占用时返回错误。
@@ -77,7 +110,14 @@ func (s *Server) Stop() error {
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 本地单文件，禁缓存，避免壳层升级后还加载旧界面
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(indexHTML))
+}
+
+// handleHealth 供壳层在加载 WebView 前轮询，确认引擎已就绪。
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"ok": true, "ts": time.Now().Unix()})
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +147,23 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleLoginStart 告诉面板「该打开哪个登录页」。
+//
+// 面板是纯网页，拉不起原生登录容器。所以这里只返回描述，由壳层通过
+// 自定义 scheme（points://login?provider=xxx）接管，打开官方登录页。
+func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("provider")
+	if id == "" {
+		writeJSON(w, map[string]any{"ok": false, "error": "缺少 provider"})
+		return
+	}
+	url := ""
+	if s.opt.LoginURL != nil {
+		url = s.opt.LoginURL(id)
+	}
+	writeJSON(w, map[string]any{"ok": url != "", "provider": id, "url": url})
+}
+
 // handleQuery 并发查询全部启用账号。
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	list, err := s.opt.Store.List()
@@ -114,35 +171,49 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	out := make([]provider.Snapshot, 0, len(list))
-	for _, a := range list {
+	// 并行查询：串行时 N 个账号的耗时是叠加的，弱网下面板会长时间停在骨架屏，
+	// 这正是「界面卡顿」的根因。每个账号独立超时，单账号慢不拖累其他账号。
+	// 结果按原顺序回填，前端渲染顺序保持稳定。
+	out := make([]provider.Snapshot, len(list))
+	var wg sync.WaitGroup
+	for i, a := range list {
+		out[i] = provider.Snapshot{Provider: a.Provider, AccountID: a.AccountID, At: time.Now()}
 		if !a.Enabled {
+			out[i].Error = "已停用"
 			continue
 		}
 		p, ok := s.opt.Reg.Get(a.Provider)
 		if !ok {
+			out[i].Error = "未支持的平台"
 			continue
 		}
 		cred, err := decodeCred(a)
 		if err != nil {
-			out = append(out, provider.Snapshot{Provider: a.Provider, AccountID: a.AccountID, Error: "凭据损坏"})
+			out[i].Error = "凭据损坏"
 			continue
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		snap, qerr := p.Query(ctx, cred)
-		cancel()
-		if qerr != nil {
-			snap.Error = qerr.Error()
-		}
-		if snap.AccountID == "" {
-			snap.AccountID = a.AccountID
-		}
-		if snap.Provider == "" {
-			snap.Provider = a.Provider
-		}
-		snap.At = time.Now()
-		out = append(out, snap)
+		wg.Add(1)
+		go func(i int, p provider.Provider, cred provider.Credential) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+			defer cancel()
+			snap, qerr := p.Query(ctx, cred)
+			if qerr != nil {
+				snap.Error = qerr.Error()
+			}
+			if snap.AccountID == "" {
+				snap.AccountID = out[i].AccountID
+			}
+			if snap.Provider == "" {
+				snap.Provider = out[i].Provider
+			}
+			if snap.At.IsZero() {
+				snap.At = time.Now()
+			}
+			out[i] = snap
+		}(i, p, cred)
 	}
+	wg.Wait()
 	writeJSON(w, out)
 }
 
@@ -207,82 +278,3 @@ func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(v)
 }
-
-// indexHTML 是单文件面板。刻意做得极简：无框架、无外部 CDN（离线可用）。
-const indexHTML = `<!DOCTYPE html>
-<html lang="zh-CN"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AI 积分</title>
-<style>
-:root{--bg:#f4f5f7;--card:#fff;--ink:#15181d;--sub:#6b7280;--line:#e5e7eb;--acc:#2f6bff;--ok:#0f7b4f;--bad:#c2410c}
-@media(prefers-color-scheme:dark){:root{--bg:#111318;--card:#191c23;--ink:#e8eaed;--sub:#9aa3b2;--line:#262b35;--acc:#5b8bff}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;padding:14px 14px calc(84px + env(safe-area-inset-bottom))}
-header{display:flex;align-items:baseline;justify-content:space-between;margin:4px 2px 14px}
-h1{font-size:19px;margin:0;letter-spacing:-.01em}
-.sum{font-size:13px;color:var(--sub)}
-.sum b{color:var(--ink);font-size:17px;font-variant-numeric:tabular-nums}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px}
-.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.name{font-weight:600;display:flex;align-items:center;gap:8px}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--sub);flex:0 0 auto}
-.dot.ok{background:var(--ok)}.dot.wait{background:var(--acc)}.dot.bad{background:var(--bad)}
-.bal{font-size:21px;font-weight:650;font-variant-numeric:tabular-nums;margin:6px 0 2px}
-.meta{font-size:13px;color:var(--sub)}
-button{border:0;border-radius:10px;padding:9px 14px;font-size:14px;font-weight:600;background:var(--acc);color:#fff}
-button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
-button:disabled{opacity:.45}
-.bar{position:fixed;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--card) 92%,transparent);border-top:1px solid var(--line);display:flex;gap:10px;backdrop-filter:saturate(180%) blur(12px)}
-.bar button{flex:1}
-.empty{color:var(--sub);text-align:center;padding:40px 10px;font-size:14px}
-</style></head><body>
-<header><h1>积分总览</h1><div class="sum">合计 <b id="total">—</b></div></header>
-<div id="list"><div class="empty">加载中…</div></div>
-<div class="bar">
-  <button class="ghost" onclick="refresh()">刷新余额</button>
-  <button id="all" onclick="checkinAll()">全部签到</button>
-</div>
-<script>
-function el(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
-async function j(u,o){const r=await fetch(u,o);return r.json()}
-function fmt(n){return (n||0).toLocaleString(undefined,{maximumFractionDigits:2})}
-async function refresh(){
-  const list=document.getElementById('list');
-  try{
-    const rows=await j('/api/query');
-    if(!Array.isArray(rows)||!rows.length){list.innerHTML='<div class="empty">还没有账号。请在壳层的设置里添加凭据。</div>';return}
-    let total=0;list.innerHTML='';
-    for(const r of rows){
-      total+=r.balance||0;
-      const c=el('div','card');
-      const top=el('div','row');
-      const nm=el('div','name');
-      const dot=el('span','dot '+(r.error?'bad':(r.checked_in?'ok':'wait')));
-      nm.appendChild(dot);nm.appendChild(el('span',null,(r.provider||'')+' · '+(r.account_id||'')));
-      top.appendChild(nm);
-      const btn=el('button','ghost',r.checked_in?'已签':'签到');
-      btn.disabled=!!r.checked_in||!!r.error;
-      btn.onclick=()=>checkinOne(r.account_id,btn);
-      top.appendChild(btn);c.appendChild(top);
-      c.appendChild(el('div','bal',(r.balance_text||fmt(r.balance))));
-      const meta=r.error?('⚠ '+r.error):((r.detail||'')+(r.streak?(' · 第 '+r.streak+' 天'):''));
-      c.appendChild(el('div','meta',meta));
-      list.appendChild(c);
-    }
-    document.getElementById('total').textContent=fmt(total);
-  }catch(e){list.innerHTML='<div class="empty">加载失败：'+e.message+'</div>'}
-}
-async function checkinOne(id,btn){
-  btn.disabled=true;btn.textContent='…';
-  try{const res=await j('/api/checkin?account='+encodeURIComponent(id),{method:'POST'});
-    const r=Array.isArray(res)?res[0]:res;
-    btn.textContent=r&&r.ok?(r.already?'已签':'完成'):'失败';
-    await refresh();
-  }catch(e){btn.textContent='失败';btn.disabled=false}
-}
-async function checkinAll(){
-  const b=document.getElementById('all');b.disabled=true;b.textContent='签到中…';
-  try{await j('/api/checkin',{method:'POST'});await refresh()}finally{b.disabled=false;b.textContent='全部签到'}
-}
-refresh();
-</script></body></html>`

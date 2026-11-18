@@ -1,30 +1,23 @@
-# 凭据与数据
+# 构建产物
+android/build/
+ios/build/
+core/bin/
+*.exe
+*.test
+
+# 凭据：任何形式都不许进仓库
 data/
-accounts.json
+*.json.tmp
+secrets/
 *.jks
 *.keystore
-*.p12
 *.mobileprovision
-*.ipa
-*.apk
-*.aab
+*.p12
 
-# 构建产物
-dist/
-build/
-core/core.a
-core/*.aar
-core/*.framework/
-*.so
-*.dylib
-
-# 本地环境
+# 编辑器 / 系统
 .DS_Store
 .idea/
 .vscode/
-*.log
-tmp/
 
-# iOS 构建产物
-ios/build/
-*.xcframework
+# gomobile 中间产物
+*.aar

@@ -42,17 +42,19 @@ type Credential struct {
 
 // Snapshot 是一次查询的归一化结果。
 type Snapshot struct {
-	Provider    string          `json:"provider"`
-	AccountID   string          `json:"account_id"`
-	OK          bool            `json:"ok"`
-	Balance     float64         `json:"balance"`
-	BalanceText string          `json:"balance_text,omitempty"`
-	CheckedIn   bool            `json:"checked_in"`
-	Streak      int             `json:"streak,omitempty"`
-	Detail      string          `json:"detail,omitempty"`
-	Error       string          `json:"error,omitempty"`
-	Raw         json.RawMessage `json:"-"`
-	At          time.Time       `json:"at"`
+	Provider    string  `json:"provider"`
+	AccountID   string  `json:"account_id"`
+	OK          bool    `json:"ok"`
+	Balance     float64 `json:"balance"`
+	BalanceText string  `json:"balance_text,omitempty"`
+	// Unit 是余额单位文案，空表示「积分」（各家默认口径一致时才留空）。
+	Unit      string          `json:"unit,omitempty"`
+	CheckedIn bool            `json:"checked_in"`
+	Streak    int             `json:"streak,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Raw       json.RawMessage `json:"-"`
+	At        time.Time       `json:"at"`
 }
 
 // Result 是一次签到归并结果。

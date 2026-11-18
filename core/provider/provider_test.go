@@ -125,7 +125,7 @@ func TestLingxiFlow(t *testing.T) {
 
 // TestDumateQuota 验证「可用 = 总额 - 已用」与写接口带 x-bce-request-id。
 func TestDumateQuota(t *testing.T) {
-	var gotReqID string
+	var gotReqID, gotCSRF string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/dumate/points/loginBonusInfo":
@@ -136,6 +136,7 @@ func TestDumateQuota(t *testing.T) {
 			}})
 		case "/api/dumate/points/loginBonus":
 			gotReqID = r.Header.Get("x-bce-request-id")
+			gotCSRF = r.Header.Get("csrftoken")
 			writeJSON(w, map[string]any{"code": 0, "msg": "ok"})
 		default:
 			http.NotFound(w, r)
@@ -144,7 +145,12 @@ func TestDumateQuota(t *testing.T) {
 	defer srv.Close()
 
 	p := NewDumate(httpx.New())
-	cred := Credential{AccountID: "d1", Cookie: "BDUSS=1", Domain: srv.URL}
+	// bce-user-info 里的值即 csrftoken，写接口必须原样带上（去掉首尾引号）
+	cred := Credential{
+		AccountID: "d1",
+		Cookie:    `BDUSS=1; bce-user-info="csrf-abc-123"; stoken=2`,
+		Domain:    srv.URL,
+	}
 
 	snap, _ := p.Query(context.Background(), cred)
 	if snap.Balance != 1700 {
@@ -157,18 +163,23 @@ func TestDumateQuota(t *testing.T) {
 	if len(gotReqID) < 16 {
 		t.Fatalf("写接口必须带 x-bce-request-id，实际 %q", gotReqID)
 	}
+	if gotCSRF != "csrf-abc-123" {
+		t.Fatalf("csrftoken 头应从 bce-user-info 取值并去引号，实际 %q", gotCSRF)
+	}
 }
 
-// TestRegistryHasCore 确保三家平台都注册成功。
+// TestRegistryHasCore 确保核心平台都注册成功。
 func TestRegistryHasCore(t *testing.T) {
 	reg := NewRegistry(httpx.New())
-	for _, id := range []string{"workbuddy", "lingxi", "dumate"} {
+	// 已接入的五家。加平台时这里要一起改——故意让它红，避免忘了写新平台的测试。
+	want := []string{"workbuddy", "lingxi", "dumate", "trae", "aipy"}
+	for _, id := range want {
 		if _, ok := reg.Get(id); !ok {
 			t.Fatalf("缺少平台 %s", id)
 		}
 	}
-	if len(reg.All()) != 3 {
-		t.Fatalf("期望 3 个平台，实际 %d", len(reg.All()))
+	if got := len(reg.All()); got != len(want) {
+		t.Fatalf("期望 %d 个平台，实际 %d", len(want), got)
 	}
 }
 
@@ -187,4 +198,89 @@ func TestMissingCredentialFailsFast(t *testing.T) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// TestTraeFlow 验证 Trae 的认证头、状态解析与「已签不重复领取」。
+func TestTraeFlow(t *testing.T) {
+	var seenAuth, seenUA, seenRegion string
+	claimed := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		seenUA = r.Header.Get("User-Agent")
+		seenRegion = r.Header.Get("X-User-Region")
+		switch r.URL.Path {
+		case "/trae/api/v2/ug/checkin_credits/status":
+			// 第一次查：没签；领过之后再查：已签
+			writeJSON(w, map[string]any{"data": map[string]any{
+				"checked_in": claimed > 0, "credits": 300, "extra_credits": 50,
+			}})
+		case "/trae/api/v2/ug/checkin_credits/claim":
+			claimed++
+			writeJSON(w, map[string]any{"code": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p := NewTrae(httpx.New())
+	cred := Credential{AccountID: "t1", AccessToken: "jwt-xyz", Domain: srv.URL}
+
+	snap, _ := p.Query(context.Background(), cred)
+	if snap.CheckedIn {
+		t.Fatalf("初始状态应为未签到")
+	}
+	if snap.Balance != 350 {
+		t.Fatalf("积分应为 credits+extra_credits=350，实际 %v", snap.Balance)
+	}
+	if seenAuth != "Cloud-IDE-JWT jwt-xyz" {
+		t.Fatalf("Authorization 头格式错误: %q", seenAuth)
+	}
+	if !strings.Contains(seenUA, "TRAE SOLO CN") {
+		t.Fatalf("UA 应为 Trae 客户端形态，实际 %q", seenUA)
+	}
+	if seenRegion != "CN" {
+		t.Fatalf("X-User-Region 应为 CN，实际 %q", seenRegion)
+	}
+
+	res, _ := p.Checkin(context.Background(), cred)
+	if !res.OK || res.Already {
+		t.Fatalf("首次签到应成功且非已签: %+v", res)
+	}
+	res2, _ := p.Checkin(context.Background(), cred)
+	if !res2.Already {
+		t.Fatalf("第二次签到应判定为已签，实际 %+v", res2)
+	}
+	if claimed != 1 {
+		t.Fatalf("claim 接口只应被调用 1 次，实际 %d", claimed)
+	}
+}
+
+// TestWorkBuddyBalanceFallback 验证余额接口多路径兜底：
+// 主路径 404 时应自动尝试下一个候选。
+func TestWorkBuddyBalanceFallback(t *testing.T) {
+	var tried []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tried = append(tried, r.URL.Path)
+		if r.URL.Path == "/billing/meter/get-user-resource-summary" {
+			http.NotFound(w, r) // 模拟该路径已下线
+			return
+		}
+		writeJSON(w, map[string]any{
+			"code": 0,
+			"data": map[string]any{"Packages": []any{
+				map[string]any{"CycleRemainCapacity": 800},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	wb := NewWorkBuddy(httpx.New())
+	sum, ok := wb.queryBalance(context.Background(), Credential{AccountID: "b1", AccessToken: "t", Domain: srv.URL})
+	if !ok || sum != 800 {
+		t.Fatalf("兜底后应拿到 800，实际 ok=%v sum=%v", ok, sum)
+	}
+	if len(tried) < 2 {
+		t.Fatalf("应至少尝试两个路径，实际 %v", tried)
+	}
 }

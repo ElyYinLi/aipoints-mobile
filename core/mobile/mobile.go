@@ -59,7 +59,12 @@ func Start(dataDir string) string {
 			e.store = st
 		}
 		if e.store != nil {
-			p := panel.New(panel.Options{Addr: PanelAddr, Store: e.store, Reg: reg})
+			p := panel.New(panel.Options{
+				Addr:     PanelAddr,
+				Store:    e.store,
+				Reg:      reg,
+				LoginURL: loginURL,
+			})
 			if err := p.Start(); err == nil {
 				e.panel = p
 			}
@@ -286,3 +291,18 @@ func errJSON(msg string) string {
 	b, _ := json.Marshal(map[string]any{"ok": false, "error": msg})
 	return string(b)
 }
+
+// loginURLs 是各平台的登录入口。面板点「添加账号」时，壳层据此打开官方页面。
+//
+// 原则：一律打开平台自己的登录页，不自己实现账号密码表单——
+// 密码只流向平台，我们不接触；平台改登录流程也不用跟着改。
+var loginURLs = map[string]string{
+	"workbuddy": "https://www.workbuddy.cn/",
+	"lingxi":    "https://www.kdocs.cn/",
+	"dumate":    "https://wenxin.baidu.com/",
+	"trae":      "https://www.trae.cn/",
+	"aipy":      "https://www.trustoken.cn/",
+}
+
+// loginURL 供面板查询某平台的登录入口。
+func loginURL(id string) string { return loginURLs[id] }

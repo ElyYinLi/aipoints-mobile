@@ -1,0 +1,72 @@
+name: build-android
+
+# Android 构建放 Linux runner：免费额度按 1× 计费，一次约 5-8 分钟。
+# iOS 构建必须 macOS（10× 计费），所以拆成两个 workflow，且 iOS 默认手动触发。
+on:
+  push:
+    branches: [main]
+    paths: ['core/**', 'android/**', '.github/workflows/build-android.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: core/go.sum
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Go 单元测试
+        working-directory: core
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: 准备 gomobile（GOPATH 模式）
+        # gomobile 在 module 模式下会强迫 core/go.mod 依赖 golang.org/x/mobile，
+        # 而后者要求 go>=1.26，会把引擎的 go 指令一起抬高。这里改用 GOPATH 模式隔离。
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          GP="$(go env GOPATH)"
+          MODVER="$(cd core && go list -m -f '{{.Version}}' golang.org/x/mobile 2>/dev/null || true)"
+          if [ -z "$MODVER" ]; then
+            # 未在 go.mod 里声明时，从模块缓存里取一份源码塞进 GOPATH/src
+            cd /tmp
+            go mod init tmp >/dev/null 2>&1 || true
+            go get golang.org/x/mobile/bind@latest >/dev/null
+            SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER:-$(cd /tmp && go list -m -f '{{.Version}}' golang.org/x/mobile)}"
+            mkdir -p "$GP/src/golang.org/x"
+            cp -r "$SRC" "$GP/src/golang.org/x/mobile"
+            rm -f "$GP/src/golang.org/x/mobile/go.mod" "$GP/src/golang.org/x/mobile/go.sum"
+          fi
+          gomobile init
+
+      - name: 安装 Android SDK
+        # runner 已自带 SDK，这里只确保 build-tools / platform / ndk 版本存在
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" > /dev/null
+
+      - name: 构建 APK
+        env:
+          BUILD_TOOLS: '34.0.0'
+          PLATFORM: 'android-34'
+        run: bash android/build-apk.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: points-apk
+          path: android/build/Points.apk
+          retention-days: 7
+          if-no-files-found: error

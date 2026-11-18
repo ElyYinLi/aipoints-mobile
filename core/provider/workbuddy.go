@@ -80,6 +80,19 @@ func (w *WorkBuddy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Error = "缺少 accessToken"
 		return snap, nil
 	}
+	// 签到状态与余额互不依赖，并发发起：每个请求各带 20s 超时，串行时最坏要等 100s
+	// （余额要试 4 条路径），面板会长时间停在骨架屏。这里用独立 context，
+	// 超时/取消只影响自己那一路。
+	type balRes struct {
+		v  float64
+		ok bool
+	}
+	balCh := make(chan balRes, 1)
+	go func() {
+		v, ok := w.queryBalance(ctx, c)
+		balCh <- balRes{v, ok}
+	}()
+
 	resp, err := w.c.DoJSON(ctx, "POST", w.base(c)+"/v2/billing/meter/checkin-activity-status", w.headers(c), map[string]any{})
 	if err != nil {
 		snap.Error = "网络错误: " + err.Error()
@@ -92,7 +105,7 @@ func (w *WorkBuddy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	}
 	if resp.Status == 401 || resp.Status == 403 {
 		snap.Error = fmt.Sprintf("鉴权失败(%d)：token 过期或身份头不匹配", resp.Status)
-		return snap, nil
+		return snap, nil // 余额 goroutine 自行结束，channel 缓冲 1，不会泄漏
 	}
 
 	// 字段路径为推断值（逆向只拿到接口形状，未见真实响应）：
@@ -110,18 +123,40 @@ func (w *WorkBuddy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	snap.Detail = "签到状态接口返回正常"
 
 	// 余额口径（App 首屏），失败只降级不报错
-	if bal, ok := w.queryBalance(ctx, c); ok {
-		snap.Balance = bal
-		snap.BalanceText = fmt.Sprintf("%.2f", bal)
+	if br := <-balCh; br.ok {
+		snap.Balance = br.v
+		snap.BalanceText = fmt.Sprintf("%.2f", br.v)
 	}
 	snap.OK = true
 	return snap, nil
 }
 
+// balancePaths 是余额接口的候选路径。
+//
+// 逆向得到的桌面版走 /billing/meter/get-user-resource-summary（无 /v2），
+// 而开源实现 dsh-checkin-all 用的是 /v2/billing/meter/get-user-resource（有 /v2）。
+// 两者可能对应不同版本的服务端，按顺序试，第一个成功即用——多一次请求换稳定性。
+var balancePaths = []string{
+	"/billing/meter/get-user-resource-summary",
+	"/v2/billing/meter/get-user-resource-summary",
+	"/v2/billing/meter/get-user-resource",
+	"/billing/meter/get-user-resource",
+}
+
 // queryBalance 取 App 首屏余额，data.Packages[].CycleRemainCapacity 求和。
 func (w *WorkBuddy) queryBalance(ctx context.Context, c Credential) (float64, bool) {
-	resp, err := w.c.DoJSON(ctx, "POST", w.base(c)+"/billing/meter/get-user-resource-summary", w.headers(c), map[string]any{})
-	if err != nil {
+	for _, path := range balancePaths {
+		if sum, ok := w.queryBalanceAt(ctx, c, path); ok {
+			return sum, true
+		}
+	}
+	return 0, false
+}
+
+// queryBalanceAt 试单一路径。返回 (余额, 是否拿到可信结果)。
+func (w *WorkBuddy) queryBalanceAt(ctx context.Context, c Credential, path string) (float64, bool) {
+	resp, err := w.c.DoJSON(ctx, "POST", w.base(c)+path, w.headers(c), map[string]any{})
+	if err != nil || resp.Status != 200 {
 		return 0, false
 	}
 	m, err := resp.JSON()

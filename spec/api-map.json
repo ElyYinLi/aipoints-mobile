@@ -12,11 +12,22 @@
     "data_dir_windows": "%APPDATA%\\AiPointsAssistant",
     "server_backend": "none (all local)",
     "network_hosts": [
-      "www.doubao.com", "api.trae.cn", "work.trae.cn",
-      "openapi.qoder.com.cn", "openapi.qoder.sh", "qoder.cn",
-      "agent.minimax.cn", "agent.minimax.io", "account.minimax.cn", "account.minimax.io",
-      "dumate.baidu.com", "www.baidu.com", "lingxi.kdocs.cn", "www.workbuddy.cn",
-      "cdn.playwright.dev", "cdn.npmmirror.com"
+      "www.doubao.com",
+      "api.trae.cn",
+      "work.trae.cn",
+      "openapi.qoder.com.cn",
+      "openapi.qoder.sh",
+      "qoder.cn",
+      "agent.minimax.cn",
+      "agent.minimax.io",
+      "account.minimax.cn",
+      "account.minimax.io",
+      "dumate.baidu.com",
+      "www.baidu.com",
+      "lingxi.kdocs.cn",
+      "www.workbuddy.cn",
+      "cdn.playwright.dev",
+      "cdn.npmmirror.com"
     ]
   },
   "providers": [
@@ -27,18 +38,67 @@
       "auth_detail": "官方浏览器 OAuth: /v2/plugin/auth/state -> authUrl -> poll /v2/plugin/auth/token; refresh: /v2/plugin/auth/token/refresh; 账号资料: /v2/plugin/login/account",
       "local_credential_encryption": "AES-256-GCM envelope; key=atRestSecretKey(44-char base64, 仅客户端进程内存); key=SHA256(secret); keyId=SHA256(key)[:16]",
       "endpoints": [
-        {"method": "POST", "url": "https://{domain}/v2/billing/meter/checkin-activity-status", "purpose": "签到状态/累计积分", "body": "{...}"},
-        {"method": "POST", "url": "https://{domain}/v2/billing/meter/daily-checkin", "purpose": "每日签到", "body": "{}"},
-        {"method": "POST", "url": "https://{domain}/billing/meter/get-user-resource-summary", "purpose": "余额(注意无 /v2)", "body": "{}", "note": "必须带 UA/Referer/Origin，否则 403"},
-        {"method": "GET", "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/status", "purpose": "猫猫旅行状态"},
-        {"method": "GET", "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/config", "purpose": "地点配置"},
-        {"method": "POST", "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/depart", "purpose": "派出", "body": "{\"location_id\":N}"},
-        {"method": "POST", "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/claim", "purpose": "领取", "body": "{}"},
-        {"method": "GET", "url": "https://{domain}/v2/activity/growth/buddy/info", "purpose": "Buddy 信息"}
+        {
+          "method": "POST",
+          "url": "https://{domain}/v2/billing/meter/checkin-activity-status",
+          "purpose": "签到状态/累计积分",
+          "body": "{...}"
+        },
+        {
+          "method": "POST",
+          "url": "https://{domain}/v2/billing/meter/daily-checkin",
+          "purpose": "每日签到",
+          "body": "{}"
+        },
+        {
+          "method": "POST",
+          "url": "https://{domain}/billing/meter/get-user-resource-summary",
+          "purpose": "余额(注意无 /v2)",
+          "body": "{}",
+          "note": "必须带 UA/Referer/Origin，否则 403"
+        },
+        {
+          "method": "GET",
+          "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/status",
+          "purpose": "猫猫旅行状态"
+        },
+        {
+          "method": "GET",
+          "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/config",
+          "purpose": "地点配置"
+        },
+        {
+          "method": "POST",
+          "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/depart",
+          "purpose": "派出",
+          "body": "{\"location_id\":N}"
+        },
+        {
+          "method": "POST",
+          "url": "https://www.workbuddy.cn/activity/growth/buddy/travel/claim",
+          "purpose": "领取",
+          "body": "{}"
+        },
+        {
+          "method": "GET",
+          "url": "https://{domain}/v2/activity/growth/buddy/info",
+          "purpose": "Buddy 信息"
+        }
       ],
-      "headers": ["Authorization: Bearer <token>", "X-User-Id", "X-Enterprise-Id", "X-Tenant-Id", "Origin", "Referer", "User-Agent"],
+      "headers": [
+        "Authorization: Bearer <token>",
+        "X-User-Id",
+        "X-Enterprise-Id",
+        "X-Tenant-Id",
+        "Origin",
+        "Referer",
+        "User-Agent"
+      ],
       "device_fingerprint": "none",
-      "mobile": {"feasible": true, "reason": "有标准浏览器 OAuth，手机端可直接走 WebView 登录拿 token"}
+      "mobile": {
+        "feasible": true,
+        "reason": "有标准浏览器 OAuth，手机端可直接走 WebView 登录拿 token"
+      }
     },
     {
       "id": "trae",
@@ -46,41 +106,125 @@
       "auth": "httpOnly cookie in per-account browser profile -> JWT via GetUserToken (page must send it)",
       "auth_detail": "https://api.trae.cn/cloudide/api/v3/common/GetUserToken（必须在页面上下文里 fetch，JS 读不到 httpOnly cookie）",
       "endpoints": [
-        {"method": "GET", "url": "https://api.trae.cn/trae/api/v2/ug/checkin_credits/status", "purpose": "签到状态"},
-        {"method": "POST", "url": "https://api.trae.cn/trae/api/v2/ug/checkin_credits/claim", "purpose": "签到"},
-        {"method": "GET", "url": "https://api.trae.cn/trae/api/v2/pay/web_user_ent_usage", "purpose": "积分余额"},
-        {"method": "GET", "url": "https://api.trae.cn/trae/api/v2/ug/activity/info", "purpose": "活动可得/待领"}
+        {
+          "method": "GET",
+          "url": "https://api.trae.cn/trae/api/v2/ug/checkin_credits/status",
+          "purpose": "签到状态"
+        },
+        {
+          "method": "POST",
+          "url": "https://api.trae.cn/trae/api/v2/ug/checkin_credits/claim",
+          "purpose": "签到"
+        },
+        {
+          "method": "GET",
+          "url": "https://api.trae.cn/trae/api/v2/pay/web_user_ent_usage",
+          "purpose": "积分余额"
+        },
+        {
+          "method": "GET",
+          "url": "https://api.trae.cn/trae/api/v2/ug/activity/info",
+          "purpose": "活动可得/待领"
+        }
       ],
-      "headers": ["x-device-id (任意15位数字)", "x-device-brand", "x-device-type"],
-      "error_codes": {"9004": "设备头校验不过/CORS预检失败", "9095": "该设备号今日名额已用", "1001/1002": "鉴权失效"},
-      "mobile": {"feasible": true, "reason": "WebView 登录拿 cookie，原生层直发接口；设备头可自行生成"}
+      "headers": [
+        "x-device-id (任意15位数字)",
+        "x-device-brand",
+        "x-device-type"
+      ],
+      "error_codes": {
+        "9004": "设备头校验不过/CORS预检失败",
+        "9095": "该设备号今日名额已用",
+        "1001/1002": "鉴权失效"
+      },
+      "mobile": {
+        "feasible": true,
+        "reason": "WebView 登录拿 cookie，原生层直发接口；设备头可自行生成"
+      }
     },
     {
       "id": "qoder",
       "name": "Qoder",
       "auth": "local_client_token (Chromium OSCrypt v10 + DPAPI) | browser PKCE login | refresh_token",
       "endpoints": [
-        {"method": "GET", "url": "https://openapi.qoder.com.cn/sash/api/v1/me/campaigns", "purpose": "当日活动列表"},
-        {"method": "POST", "url": "https://openapi.qoder.com.cn/sash/api/v1/me/campaigns/{campaignId}/claim", "purpose": "领取 100 Credits"},
-        {"method": "GET", "url": "https://openapi.qoder.com.cn/api/v2/quota/usage", "purpose": "资源包余额"},
-        {"method": "GET", "url": "https://openapi.qoder.com.cn/api/v1/userinfo", "purpose": "账号信息"},
-        {"method": "POST", "url": "https://openapi.qoder.com.cn/api/v1/deviceToken/refresh", "purpose": "续期", "body": "{\"refresh_token\":\"drt-...\"}"},
-        {"method": "GET", "url": "https://openapi.qoder.com.cn/api/v2/activity/claim/eligibility", "purpose": "Activity 体系（CN1.0 不可用）"}
+        {
+          "method": "GET",
+          "url": "https://openapi.qoder.com.cn/sash/api/v1/me/campaigns",
+          "purpose": "当日活动列表"
+        },
+        {
+          "method": "POST",
+          "url": "https://openapi.qoder.com.cn/sash/api/v1/me/campaigns/{campaignId}/claim",
+          "purpose": "领取 100 Credits"
+        },
+        {
+          "method": "GET",
+          "url": "https://openapi.qoder.com.cn/api/v2/quota/usage",
+          "purpose": "资源包余额"
+        },
+        {
+          "method": "GET",
+          "url": "https://openapi.qoder.com.cn/api/v1/userinfo",
+          "purpose": "账号信息"
+        },
+        {
+          "method": "POST",
+          "url": "https://openapi.qoder.com.cn/api/v1/deviceToken/refresh",
+          "purpose": "续期",
+          "body": "{\"refresh_token\":\"drt-...\"}"
+        },
+        {
+          "method": "GET",
+          "url": "https://openapi.qoder.com.cn/api/v2/activity/claim/eligibility",
+          "purpose": "Activity 体系（CN1.0 不可用）"
+        }
       ],
-      "headers": ["Authorization: Bearer <dt-token>", "Cosy-ClientType:10", "Cosy-Version:0.3.3", "Cosy-MachineOS", "Cosy-MachineToken", "Cosy-MachineCode", "Cosy-MachineType", "Cosy-MachineId", "User-Agent: Qoder"],
+      "headers": [
+        "Authorization: Bearer <dt-token>",
+        "Cosy-ClientType:10",
+        "Cosy-Version:0.3.3",
+        "Cosy-MachineOS",
+        "Cosy-MachineToken",
+        "Cosy-MachineCode",
+        "Cosy-MachineType",
+        "Cosy-MachineId",
+        "User-Agent: Qoder"
+      ],
       "device_fingerprint": "runtime-info.exe (Qoder 安装目录 resources/umid) 实时生成；伪造 -> 503 RISK_DEPENDENCY_UNAVAILABLE；缺失 -> 空列表",
-      "domains": {"qodercn": "https://openapi.qoder.com.cn", "other": "https://openapi.qoder.sh"},
-      "mobile": {"feasible": false, "reason": "领取强依赖桌面端 runtime-info.exe 真机指纹，移动端无等价物；只能做余额展示+跳转"}
+      "domains": {
+        "qodercn": "https://openapi.qoder.com.cn",
+        "other": "https://openapi.qoder.sh"
+      },
+      "mobile": {
+        "feasible": false,
+        "reason": "领取强依赖桌面端 runtime-info.exe 真机指纹，移动端无等价物；只能做余额展示+跳转"
+      }
     },
     {
       "id": "minimax",
       "name": "MiniMax Code / 海螺",
       "auth": "local_client_token | device_authorization_flow | browser_login; refresh via /oauth2/token",
       "endpoints": [
-        {"method": "GET", "url": "{host}/minimax-cloud/api/v1/signin/status", "purpose": "签到面板"},
-        {"method": "POST", "url": "{host}/minimax-cloud/api/v1/signin/claim", "purpose": "领取每日积分"},
-        {"method": "GET", "url": "{host}/minimax-cloud/api/v1/signin/config", "purpose": "签到规则"},
-        {"method": "POST", "url": "{account_host}/oauth2/token", "purpose": "续期"}
+        {
+          "method": "GET",
+          "url": "{host}/minimax-cloud/api/v1/signin/status",
+          "purpose": "签到面板"
+        },
+        {
+          "method": "POST",
+          "url": "{host}/minimax-cloud/api/v1/signin/claim",
+          "purpose": "领取每日积分"
+        },
+        {
+          "method": "GET",
+          "url": "{host}/minimax-cloud/api/v1/signin/config",
+          "purpose": "签到规则"
+        },
+        {
+          "method": "POST",
+          "url": "{account_host}/oauth2/token",
+          "purpose": "续期"
+        }
       ],
       "headers": [
         "Authorization: Bearer <token>",
@@ -89,36 +233,129 @@
         "x-signature = md5(sec + SIGN_SALT + body)",
         "User-Agent: MiniMaxAgent ... MiniMax/3.1.0"
       ],
-      "hosts": {"cn": "https://agent.minimax.cn", "intl": "https://agent.minimax.io", "account_cn": "https://account.minimax.cn", "account_intl": "https://account.minimax.io"},
-      "mobile": {"feasible": true, "reason": "支持设备授权码登录；签名是固定盐+md5，可完全复刻"}
+      "hosts": {
+        "cn": "https://agent.minimax.cn",
+        "intl": "https://agent.minimax.io",
+        "account_cn": "https://account.minimax.cn",
+        "account_intl": "https://account.minimax.io"
+      },
+      "mobile": {
+        "feasible": true,
+        "reason": "支持设备授权码登录；签名是固定盐+md5，可完全复刻"
+      }
+    },
+    {
+      "id": "aipy",
+      "name": "AiPy Pro（Trustoken 用户中心）",
+      "auth": "cookie session | bearer token",
+      "auth_detail": "浏览器登录 www.trustoken.cn 后 cookie 直连；亦支持 Authorization: Bearer（控制台令牌）",
+      "source": "用户私有仓库 ElyYinLi/aipy-checkin → internal/trustoken（已核对源码，非逆向猜测）",
+      "endpoints": [
+        {
+          "method": "GET",
+          "url": "https://{domain}/api/user/self",
+          "purpose": "当前用户（判定凭据有效）",
+          "body": "-"
+        },
+        {
+          "method": "GET",
+          "url": "https://{domain}/api/user/checkin/status",
+          "purpose": "今日签到状态",
+          "body": "-"
+        },
+        {
+          "method": "POST",
+          "url": "https://{domain}/api/user/checkin",
+          "purpose": "每日签到",
+          "body": "无"
+        },
+        {
+          "method": "GET",
+          "url": "https://{domain}/api/user/daily_tasks/status",
+          "purpose": "每日任务（默认不自动领取）",
+          "body": "-"
+        },
+        {
+          "method": "POST",
+          "url": "https://{domain}/api/user/daily_tasks/claim",
+          "purpose": "领取任务奖励",
+          "body": "{\"task_type\":\"...\"}"
+        }
+      ],
+      "notes": "信封为 {success,message,data}；重复签到时 success=false 且文案含「已签到」；额度口径 500000 = 1 单位",
+      "mobile": "ok"
     },
     {
       "id": "dumate",
       "name": "百度搭子 (DuMate)",
       "auth": "baidu_cookie (客户端 Chromium 解密 或 CDP 登录采集)",
       "endpoints": [
-        {"method": "GET", "url": "https://dumate.baidu.com/api/dumate/points/loginBonusInfo", "purpose": "签到状态"},
-        {"method": "POST", "url": "https://dumate.baidu.com/api/dumate/points/loginBonus", "purpose": "领取签到积分"},
-        {"method": "GET", "url": "https://dumate.baidu.com/api/dumate/points/quota_overview", "purpose": "积分总览(余额=总额-已用)"},
-        {"method": "GET", "url": "https://dumate.baidu.com/api/dumate/activity/growth-plan/draw/status", "purpose": "抽奖状态"},
-        {"method": "POST", "url": "https://dumate.baidu.com/api/dumate/activity/growth-plan/draw", "purpose": "抽奖", "note": "需 x-bce-request-id"}
+        {
+          "method": "GET",
+          "url": "https://dumate.baidu.com/api/dumate/points/loginBonusInfo",
+          "purpose": "签到状态"
+        },
+        {
+          "method": "POST",
+          "url": "https://dumate.baidu.com/api/dumate/points/loginBonus",
+          "purpose": "领取签到积分"
+        },
+        {
+          "method": "GET",
+          "url": "https://dumate.baidu.com/api/dumate/points/quota_overview",
+          "purpose": "积分总览(余额=总额-已用)"
+        },
+        {
+          "method": "GET",
+          "url": "https://dumate.baidu.com/api/dumate/activity/growth-plan/draw/status",
+          "purpose": "抽奖状态"
+        },
+        {
+          "method": "POST",
+          "url": "https://dumate.baidu.com/api/dumate/activity/growth-plan/draw",
+          "purpose": "抽奖",
+          "note": "需 x-bce-request-id"
+        }
       ],
-      "headers": ["Cookie: 百度域", "x-bce-request-id (写接口)"],
+      "headers": [
+        "Cookie: 百度域",
+        "x-bce-request-id (写接口)"
+      ],
       "origin": "移植自 totorosir-dumate-checkin v1.1.0",
-      "mobile": {"feasible": true, "reason": "纯 cookie + REST，WebView 登录百度账号即可"}
+      "mobile": {
+        "feasible": true,
+        "reason": "纯 cookie + REST，WebView 登录百度账号即可"
+      }
     },
     {
       "id": "lingxi",
       "name": "灵犀 (金山 WPS)",
       "auth": "kdocs_cookie (客户端 Chromium 解密 或 CDP 登录采集)",
       "endpoints": [
-        {"method": "GET", "url": "https://lingxi.kdocs.cn/api/public/v1/tasks", "purpose": "任务与签到状态"},
-        {"method": "POST", "url": "https://lingxi.kdocs.cn/api/public/v1/tasks/daily_check_in/claim?date=YYYY-MM-DD", "purpose": "领取每日签到"},
-        {"method": "GET", "url": "https://lingxi.kdocs.cn/api/public/v1/credits/balance", "purpose": "智点余额"}
+        {
+          "method": "GET",
+          "url": "https://lingxi.kdocs.cn/api/public/v1/tasks",
+          "purpose": "任务与签到状态"
+        },
+        {
+          "method": "POST",
+          "url": "https://lingxi.kdocs.cn/api/public/v1/tasks/daily_check_in/claim?date=YYYY-MM-DD",
+          "purpose": "领取每日签到"
+        },
+        {
+          "method": "GET",
+          "url": "https://lingxi.kdocs.cn/api/public/v1/credits/balance",
+          "purpose": "智点余额"
+        }
       ],
-      "headers": ["Cookie: kdocs 域"],
+      "headers": [
+        "Cookie: kdocs 域"
+      ],
       "rules_source": "接口返回 extra.check_in_days / extra.today_day，status=available 才可领",
-      "mobile": {"feasible": true, "reason": "纯 cookie + REST"}
+      "mobile": {
+        "feasible": true,
+        "reason": "纯 cookie + REST"
+      }
     },
     {
       "id": "doubao",
@@ -127,20 +364,45 @@
       "strategy": "page_automation_via_cdp",
       "ua_gate": "navigator.userAgent 需包含 samanthadoubao / SamanthaDoubao/2.33.5，否则活动页显示‘仅支持电脑版’(i18n DBPC_BTS_Ineligible_NonPC_Title)",
       "endpoints": [
-        {"method": "POST", "url": "https://www.doubao.com/alice/ug/campaign/landing/checkin", "purpose": "签到（由页面自身发出，含 scene / AgwCommonParam / 风控 token）"}
+        {
+          "method": "POST",
+          "url": "https://www.doubao.com/alice/ug/campaign/landing/checkin",
+          "purpose": "签到（由页面自身发出，含 scene / AgwCommonParam / 风控 token）"
+        }
       ],
-      "pages": ["https://www.doubao.com/chat/", "https://www.doubao.com/pc/agent-explore"],
+      "pages": [
+        "https://www.doubao.com/chat/",
+        "https://www.doubao.com/pc/agent-explore"
+      ],
       "extra": "签到后扫描进度条，领取已解锁的累计档位奖励",
-      "mobile": {"feasible": "conditional", "reason": "需隐藏 WebView + 自定义 UA + JS 点击；DOM 随官方改版失效，维护成本最高"}
+      "mobile": {
+        "feasible": "conditional",
+        "reason": "需隐藏 WebView + 自定义 UA + JS 点击；DOM 随官方改版失效，维护成本最高"
+      }
     }
   ],
   "mobile_port_notes": {
-    "blocked_by_desktop_only_credentials": ["workbuddy(local)", "qoder", "minimax(local)", "trae(local)", "lingxi(local)", "dumate(local)"],
+    "blocked_by_desktop_only_credentials": [
+      "workbuddy(local)",
+      "qoder",
+      "minimax(local)",
+      "trae(local)",
+      "lingxi(local)",
+      "dumate(local)"
+    ],
     "ios_background_limit": "BGTaskScheduler 不保证精确时刻；只能做‘到点本地通知 + 打开即补签’",
     "android_background": "WorkManager + AlarmManager.setExactAndAllowWhileIdle 可做到准时",
     "cookie_isolation": "iOS 每账号一个 WKWebsiteDataStore；Android 每账号独立 CookieManager 实例",
     "credential_storage": "Keychain / Android Keystore（桌面版是明文 JSON，不要照抄）",
     "recommended_stack": "Flutter + webview_flutter + flutter_secure_storage（或 SwiftUI/WKWebView + Kotlin/Compose 双端原生）",
-    "mvp_order": ["workbuddy", "lingxi", "dumate", "trae", "minimax", "doubao(最后)", "qoder(仅展示)"]
+    "mvp_order": [
+      "workbuddy",
+      "lingxi",
+      "dumate",
+      "trae",
+      "minimax",
+      "doubao(最后)",
+      "qoder(仅展示)"
+    ]
   }
 }
