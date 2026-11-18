@@ -62,7 +62,11 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
 	mux.HandleFunc("/api/tasks/claim_all", s.handleTaskClaimAll)
-	// 抽奖：百度搭子签到后送抽奖机会，随「一键签到」一起抽掉
+	// 抽奖：百度搭子签到后送抽奖机会，随「一键签到」一起抽掉；
+	// 另给卡片上的「抽奖」按钮提供查询剩余次数 / 手动抽一次的入口
+	// （用户要求能看见「还有几次、抽到了什么」，不能只有静默批量）。
+	mux.HandleFunc("/api/lottery/status", s.handleLotteryStatus)
+	mux.HandleFunc("/api/lottery/draw", s.handleLotteryDraw)
 	mux.HandleFunc("/api/lottery/draw_all", s.handleLotteryDrawAll)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
@@ -71,6 +75,7 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/account/add", s.handleAccountAdd)
 	mux.HandleFunc("/api/account/delete", s.handleAccountDelete)
 	mux.HandleFunc("/api/account/toggle", s.handleAccountToggle)
+	mux.HandleFunc("/api/account/reorder", s.handleAccountReorder)
 	mux.HandleFunc("/api/probe", s.handleProbe)
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/import", s.handleImport)

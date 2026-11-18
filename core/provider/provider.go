@@ -84,7 +84,8 @@ type Meta struct {
 	// 前端据此决定是否在账号卡片上显示「任务」按钮。
 	Tasks bool `json:"tasks,omitempty"`
 	// Lottery 表示该平台支持「签到后抽奖」（实现了 LotteryProvider）。
-	// 抽奖随「一键签到」自动执行，前端不需要额外按钮。
+	// 抽奖会随「一键签到」自动执行；同时账号卡片上会显示「抽奖」入口，
+	// 供用户查看剩余次数、抽到了什么、以及手动补抽。
 	Lottery bool `json:"lottery,omitempty"`
 }
 

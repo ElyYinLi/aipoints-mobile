@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -140,5 +142,122 @@ func TestProvidersMarkLotterySupport(t *testing.T) {
 	}
 	if others {
 		t.Fatal("其他平台不应标记 lottery=true")
+	}
+}
+
+// TestLotteryStatus 单账号查询剩余次数：前端「抽奖」入口的第一屏数据。
+func TestLotteryStatus(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/dumate/activity/growth-plan/draw/status" {
+			w.Write([]byte(`{"code":0,"data":{"remaining_draws":3}}`))
+			return
+		}
+		w.Write([]byte(`{"code":0}`))
+	}))
+	defer up.Close()
+
+	fs := fakeStoreWithAccounts{accounts: []store.Account{
+		{Provider: "dumate", AccountID: "d1", Enabled: true,
+			SecretJSON: json.RawMessage(`{"cookie":"BDUSS=x","domain":"` + up.URL + `"}`)},
+	}}
+	s := New(Options{Store: fs, Reg: provider.NewRegistry(httpx.New())})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/lottery/status", s.handleLotteryStatus)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lottery/status?account=d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["ok"] != true {
+		t.Fatalf("应返回 ok=true，实际 %v", out)
+	}
+	if out["remaining"].(float64) != 3 {
+		t.Fatalf("剩余次数应为 3，实际 %v", out["remaining"])
+	}
+}
+
+// TestLotteryStatusUnsupported 不支持的平台要给出明确文案，而不是空数据。
+func TestLotteryStatusUnsupported(t *testing.T) {
+	fs := fakeStoreWithAccounts{accounts: []store.Account{
+		{Provider: "lingxi", AccountID: "l1", Enabled: true,
+			SecretJSON: json.RawMessage(`{"cookie":"s=3"}`)},
+	}}
+	s := New(Options{Store: fs, Reg: provider.NewRegistry(httpx.New())})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/lottery/status", s.handleLotteryStatus)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/lottery/status?account=l1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if out["ok"] != false {
+		t.Fatalf("不支持抽奖的平台应返回 ok=false，实际 %v", out)
+	}
+	if out["error"] == "" || out["error"] == nil {
+		t.Fatalf("应带错误说明，实际 %v", out)
+	}
+}
+
+// TestLotteryDrawSingle 手动抽一次：必须回传奖品与剩余次数，供前端即时刷新。
+func TestLotteryDrawSingle(t *testing.T) {
+	var body map[string]any
+	var remaining int32 = 1
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dumate/activity/growth-plan/draw/status":
+			// 与真实上游一致：次数随抽奖递减
+			w.Write([]byte(`{"code":0,"data":{"remaining_draws":` +
+				strconv.Itoa(int(atomic.LoadInt32(&remaining))) + `}}`))
+		case "/api/dumate/activity/growth-plan/draw":
+			body = map[string]any{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			atomic.StoreInt32(&remaining, 0)
+			w.Write([]byte(`{"code":0,"data":{"remaining_draws":0,"prize_name":"7天会员","prize_points":0}}`))
+		default:
+			w.Write([]byte(`{"code":0}`))
+		}
+	}))
+	defer up.Close()
+
+	fs := fakeStoreWithAccounts{accounts: []store.Account{
+		{Provider: "dumate", AccountID: "d1", Enabled: true,
+			SecretJSON: json.RawMessage(`{"cookie":"BDUSS=x","domain":"` + up.URL + `"}`)},
+	}}
+	s := New(Options{Store: fs, Reg: provider.NewRegistry(httpx.New())})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/lottery/draw", s.handleLotteryDraw)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	payload := strings.NewReader(`{"account":"d1"}`)
+	resp, err := http.Post(srv.URL+"/api/lottery/draw", "application/json", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+
+	if out["ok"] != true {
+		t.Fatalf("抽奖应成功，实际 %v", out)
+	}
+	if out["prize"] != "7天会员" {
+		t.Fatalf("应回传奖品名，实际 %v", out["prize"])
+	}
+	if out["remaining"].(float64) != 0 {
+		t.Fatalf("抽完后剩余应为 0，实际 %v", out["remaining"])
+	}
+	if rid, _ := body["request_id"].(string); rid == "" {
+		t.Fatalf("必须带非空 request_id，实际 %v", body)
 	}
 }

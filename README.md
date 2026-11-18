@@ -1,34 +1,92 @@
-# aipy-mobile
+<div align="center">
 
-把桌面版「AI 积分助手」的签到能力搬到手机上，**iOS + Android 双端原生**。
+# 积分矩阵 · Pointex
+
+**一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
+
+<p>
+  <img alt="version" src="https://img.shields.io/badge/version-0.5.0-4F5BD5">
+  <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
+  <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
+
+<p>
+  <a href="https://github.com/ElyYinLi/aipoints-mobile/releases/tag/android-latest">📥 下载 Android</a>
+  ·
+  <a href="https://github.com/ElyYinLi/aipoints-mobile/releases/tag/ios-latest">📥 下载 iOS</a>
+  ·
+  <a href="#本地运行">本地运行</a>
+  ·
+  <a href="#架构">架构</a>
+</p>
+
+</div>
+
+---
 
 ## 这是什么
 
-桌面版是 PyInstaller 打包的 Python 程序（加密结论：**未加壳、未混淆**，详见 `docs/`）。
-本仓库不复用它的任何代码，只复用从它身上逆向出来的**接口事实**：每个平台登录后
-怎么查余额、怎么签到、需要哪些 header。剩下全部重写。
+积分矩阵把散落在多个 AI 平台上的「签到 / 每日任务 / 抽奖」收敛成一个动作：
 
-UI 用一套：Go 侧起一个只监听 `127.0.0.1` 的 HTTP 面板（单文件 HTML），
-iOS 用 WKWebView、Android 用 WebView 加载它。改界面只改一份。
+> 打开应用 → 点「一键签到」→ 自动完成当日全部操作 → 一条结果告诉你签了几个、领了多少、抽到什么。
 
-## 结构
+它不依赖任何服务器：引擎跑在手机本地回环地址，凭据只存在系统安全存储里。
 
-```
-core/                 Go 引擎（唯一有业务逻辑的地方）
-  provider/           各平台适配器：workbuddy / aipy / dumate / lingxi / trae
-  httpx/              零依赖 HTTP 层
-  scheduler/          当日随机错峰排期（FNV-1a 稳定哈希）
-  store/              账号存储接口（移动端换成 Keychain/Keystore）
-  panel/              本机回环面板（内嵌 HTML）
-  mobile/             gomobile bind 导出层（JSON 字符串进出）
-  cmd/pointsctl/      命令行验证工具（Linux/macOS 直接跑，不用手机）
-android/              极薄 Java 壳：WebView + 登录容器 + 前台服务
-ios/                  SwiftUI + WKWebView + Keychain
-spec/api-map.json     逆向得到的接口地图（机器可读）
-.github/workflows/    Android 用 Linux runner，iOS 用 macOS runner（均出可安装产物）
-```
+**核心取舍：宁可少做一个功能，也不把凭据发到云端。**
 
-## 本地跑（不需要手机）
+## 特性
+
+| | |
+|---|---|
+| ⚡ **一键全套** | 签到 → 领任务奖励 → 抽签到赠送的抽奖机会，三步串成一个动作，只回报一条合并结果 |
+| 🔒 **本地优先** | 引擎监听 `127.0.0.1`，凭据进 iOS Keychain / Android Keystore，不经任何第三方服务器 |
+| 🎨 **双端同构** | UI 由 Go 侧单文件 HTML 提供，改界面只改一份，iOS 与 Android 完全一致 |
+| 📱 **三种视图** | 完整卡片 / 紧凑列表一键切换；长按任意账号可拖动排序 |
+| 🌗 **三态主题** | 跟随系统 / 强制浅色 / 强制深色，状态栏图标明暗同步 |
+| 💾 **免登录迁移** | 备份导出为真实文件（系统文件面板选位置），换机导入即恢复全部账号与登录态 |
+| 🪶 **零框架** | 前端不用框架、不用打包器，包体为零，首屏无白屏等待 |
+
+## 截图
+
+<div align="center">
+  <em>（此处可放置 3 张截图：卡片视图 / 紧凑视图 / 抽奖面板）</em>
+</div>
+
+## 支持平台
+
+| 平台 | 认证方式 | 签到 | 任务 | 抽奖 |
+|---|---|:---:|:---:|:---:|
+| WorkBuddy | OAuth token | ✅ | — | — |
+| 灵犀（kdocs） | cookie | ✅ | — | — |
+| 百度搭子 | cookie | ✅ | — | ✅ |
+| AiPy | cookie | ✅ | ✅ | — |
+| Trae | JWT | ✅ | — | — |
+| MiniMax | cookie（盐值待确认） | 🚧 | — | — |
+| 豆包 | 页面自动化 | 🚧 | — | — |
+| Qoder | 桌面端指纹 | ❌ 仅展示 | — | — |
+
+## 安装
+
+### Android
+
+1. 下载 [`Points.apk`](https://github.com/ElyYinLi/aipoints-mobile/releases/download/android-latest/Points.apk)
+2. 允许「安装未知来源应用」
+3. 安装后打开，点「添加账号」，用官方网页登录
+
+> 覆盖升级不会丢账号：APK 签名密钥固定（`CN=Points`），可直接覆盖安装。
+
+### iOS
+
+自签 IPA，需要重签工具：
+
+1. 下载 [`Points.ipa`](https://github.com/ElyYinLi/aipoints-mobile/releases/download/ios-latest/Points.ipa)
+2. 用 [SideStore](https://sidestore.io/) / AltStore / Sideloadly 重签安装
+3. 首次打开信任开发者证书（设置 → 通用 → VPN与设备管理）
+
+## 本地运行
+
+引擎可以脱离手机独立跑，用来调接口最方便：
 
 ```bash
 cd core
@@ -37,20 +95,76 @@ go run ./cmd/pointsctl -action serve -dir /tmp/pts
 # 浏览器打开 http://127.0.0.1:7879
 ```
 
-## 构建
+## 架构
 
-```bash
-bash android/build-apk.sh      # 需要 ANDROID_HOME
-bash ios/build-ipa.sh          # 只能在 macOS 上跑
+```
+┌──────────────────────────────────────────────────────┐
+│  iOS (SwiftUI + WKWebView)   Android (Java + WebView)│
+│         └────────── 同一份 HTML 面板 ──────────┘      │
+├──────────────────────────────────────────────────────┤
+│  core/  Go 引擎（唯一有业务逻辑的地方）               │
+│    provider/   平台适配器，统一 Provider 接口          │
+│    panel/      本机回环 HTTP 面板（内嵌单文件 HTML）   │
+│    store/      账号存储抽象（壳层换成 Keychain/Keystore）│
+│    scheduler/  当日随机错峰（FNV-1a 稳定哈希）         │
+│    mobile/     gomobile bind 导出层（JSON 字符串进出） │
+└──────────────────────────────────────────────────────┘
 ```
 
-或者用 CI：Android 每次 push 自动构建；iOS 手动触发（理由见 workflow 里的配额说明）。
+### 目录
 
+```
+core/                 Go 引擎
+  provider/           平台适配器：workbuddy / aipy / dumate / lingxi / trae
+  panel/              面板 HTTP 服务 + 内嵌前端（index.go / icons.go）
+  httpx/              零依赖 HTTP 层
+  scheduler/          当日随机错峰排期
+  store/              账号存储（含拖拽排序的 Order 字段）
+  mobile/             gomobile bind 导出层
+  cmd/pointsctl/      命令行验证工具
+android/              薄 Java 壳：WebView + 登录容器 + 前台服务
+ios/                  SwiftUI + WKWebView + Keychain
+spec/api-map.json     接口地图（机器可读）
+docs/                 逆向分析、设计决策、沙箱踩坑记录
+.github/workflows/    CI：Linux 出 APK，macOS 出 IPA
+```
 
-## 在受限沙箱里同步代码
+### 能力接口
 
-如果 `git push` 反复超时（沙箱网络会拦 git 协议端点，带 token 也一样），别修它，
-改走 REST API：
+平台能力用「可选接口 + 类型断言」表达，新增能力不需要改所有适配器：
+
+```go
+type TaskClaimer interface {          // 每日任务领取
+    Tasks(ctx, cred) ([]Task, error)
+    ClaimTask(ctx, cred, taskType) (ClaimResult, error)
+}
+
+type LotteryProvider interface {      // 签到后抽奖
+    DrawStatus(ctx, cred) (DrawStatus, error)
+    Draw(ctx, cred) (DrawResult, error)
+}
+```
+
+`Registry.All()` 自动探测并写入 `Meta.Tasks` / `Meta.Lottery`，前端据此决定是否显示对应按钮。
+
+## 开发
+
+```bash
+# 全量测试
+cd core && go test ./...
+
+# 构建（需要 ANDROID_HOME）
+bash android/build-apk.sh
+
+# 构建 iOS（只能在 macOS）
+bash ios/build-ipa.sh
+```
+
+CI：Android 每次 push 自动构建；iOS 手动触发（macOS runner 配额限制，理由见 workflow 注释）。
+
+### 在受限沙箱里同步代码
+
+如果 `git push` 反复超时（沙箱网络会拦 git 协议端点，带 token 也一样），别修它，改走 REST API：
 
 ```bash
 export GH_TOKEN=github_pat_xxx
@@ -58,10 +172,11 @@ python3 tools/gh_sync.py --repo OWNER/NAME --dry-run   # 看差异
 python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 ```
 
-原理与全部实测坑见 [`docs/SANDBOX-GITHUB.md`](docs/SANDBOX-GITHUB.md)。
-发版/上传前务必跑 `python3 tools/check_secrets.py .`（CI 已强制执行）。
+原理与全部实测坑见 [`docs/SANDBOX-GITHUB.md`](docs/SANDBOX-GITHUB.md)。发版前务必跑 `python3 tools/check_secrets.py .`（CI 已强制执行）。
 
-## 设计约束（都是踩过坑之后定下来的）
+## 设计约束
+
+每一条都是踩过坑之后定下来的：
 
 | 约束 | 原因 |
 |---|---|
@@ -69,22 +184,16 @@ python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 | 登录一律走官方网页（系统 WebView） | 不碰用户密码；平台改 OAuth 流程也不影响我们 |
 | 同平台多账号用独立 WebView 数据仓 | 否则 cookie 串号，签到会签到别人账上 |
 | 签到串行 + 平台间 1.2s 间隔 + 当日随机错峰 | 批量并发是风控触发的最主要原因 |
+| 抽奖 `request_id` 每次全新生成 | 上游按幂等键判重，复用会被拒 |
 | gomobile 产出**静态库**而非 dylib | dylib 会被放进 `Frameworks/`，多数自签工具报 `Invalid mach-o file!` |
-| UI 走本地 HTML 而不是原生声明式 | 一套代码双端复用，且不引入 SwiftUI/Compose 两套学习成本 |
-| GitHub Free 私有仓库 macOS runner 每月只有 200 分钟 | 2000 分钟 ÷ 10 倍率；iOS 构建必须手动触发 |
+| UI 走本地 HTML 而不是原生声明式 | 一套代码双端复用，不引入 SwiftUI/Compose 两套成本 |
+| 混合单位不显示总数 | 100 灵石 + 12.5 积分加起来没有任何含义 |
+| 签名密钥随仓库走 | 换密钥 = 用户必须卸载重装 = 账号全丢 |
 
-## 平台支持现状
+## 致谢
 
-| 平台 | 认证 | 状态 |
-|---|---|---|
-| WorkBuddy | OAuth token | 已实现并测试 |
-| 灵犀（kdocs） | cookie | 已实现并测试 |
-| 百度搭子 | cookie | 已实现并测试 |
-| Trae | JWT（需 WebView 取） | 待接 |
-| MiniMax | cookie（盐值未确认） | 待确认 |
-| 豆包 | 页面自动化 | 只能 WebView 驱动 |
-| Qoder | 桌面端指纹 | 移动端无解，只做展示 |
+接口事实来自对「AI 积分助手 v2.2.0」的静态分析（未加壳未混淆），本仓库不复用其任何代码，仅复用接口知识。详见 [`docs/逆向分析报告.md`](docs/逆向分析报告.md)。
 
 ## 许可证
 
-自用项目，不分发。
+[MIT](LICENSE) —— 仅供个人学习与自用。

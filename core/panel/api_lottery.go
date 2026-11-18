@@ -7,7 +7,117 @@ import (
 	"time"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/provider"
+	"github.com/ElyYinLi/aipoints-mobile/core/store"
 )
+
+// handleLotteryStatus 查询指定账号的抽奖状态。
+//
+// GET /api/lottery/status?account=<account_id>
+//
+// 用户要「能看到还有几次机会、抽到了什么」——一键签到是静默抽掉的，
+// 这里给一个能点进去看的入口（卡片上的「抽奖」按钮）。
+func (s *Server) handleLotteryStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireStore(w) {
+		return
+	}
+	accountID := r.URL.Query().Get("account")
+	if accountID == "" {
+		writeJSON(w, map[string]any{"ok": false, "error": "缺少 account"})
+		return
+	}
+	a, lot, cred, errMsg := s.lotteryTarget(accountID)
+	if errMsg != "" {
+		writeJSON(w, map[string]any{"ok": false, "error": errMsg})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	st, serr := lot.DrawStatus(ctx, cred)
+	if serr != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": serr.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "provider": a.Provider, "remaining": st.Remaining})
+}
+
+// handleLotteryDraw 手动抽一次奖（点「抽奖」按钮时用）。
+//
+// POST /api/lottery/draw {"account":"..."}
+//
+// 与 draw_all 的区别：这里是用户主动点，所以必须有明确回包——
+// 剩 0 次、抽中什么、失败原因都要如实返回，不能像批量那样静默跳过。
+func (s *Server) handleLotteryDraw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireStore(w) {
+		return
+	}
+	var in struct {
+		Account string `json:"account"`
+	}
+	if err := readBody(r, &in); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if in.Account == "" {
+		writeJSON(w, map[string]any{"ok": false, "error": "缺少 account"})
+		return
+	}
+	_, lot, cred, errMsg := s.lotteryTarget(in.Account)
+	if errMsg != "" {
+		writeJSON(w, map[string]any{"ok": false, "error": errMsg})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	res, derr := lot.Draw(ctx, cred)
+	if derr != nil && res.Error == "" {
+		res.Error = derr.Error()
+	}
+	out := map[string]any{
+		"ok": res.OK, "gain": res.Gain, "unit": res.Unit, "prize": res.Prize,
+		"error": res.Error,
+	}
+	// 抽完顺手把剩余次数带回去，前端不用再发一次 status 请求
+	sctx, scancel := context.WithTimeout(r.Context(), 15*time.Second)
+	if st, serr := lot.DrawStatus(sctx, cred); serr == nil {
+		out["remaining"] = st.Remaining
+	}
+	scancel()
+	writeJSON(w, out)
+}
+
+// lotteryTarget 找出 account 对应的抽奖平台与凭据，出错时返回可直接回给前端的文案。
+func (s *Server) lotteryTarget(accountID string) (store.Account, provider.LotteryProvider, provider.Credential, string) {
+	var zero store.Account
+	var nilLot provider.LotteryProvider
+	var nilCred provider.Credential
+	list, err := s.opt.Store.List()
+	if err != nil {
+		return zero, nilLot, nilCred, err.Error()
+	}
+	for _, a := range list {
+		if a.AccountID != accountID {
+			continue
+		}
+		p, ok := s.opt.Reg.Get(a.Provider)
+		if !ok {
+			return a, nilLot, nilCred, "未支持的平台"
+		}
+		lot, ok := p.(provider.LotteryProvider)
+		if !ok {
+			return a, nilLot, nilCred, "该平台不支持抽奖"
+		}
+		cred, err := decodeCred(a)
+		if err != nil {
+			return a, nilLot, nilCred, "凭据损坏"
+		}
+		return a, lot, cred, ""
+	}
+	return zero, nilLot, nilCred, "账号不存在"
+}
 
 // handleLotteryDrawAll 一键抽奖：对所有启用且支持抽奖的账号，把剩余次数全部抽掉。
 //

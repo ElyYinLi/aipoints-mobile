@@ -18,7 +18,7 @@ const indexTmpl = `<!DOCTYPE html>
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#FBF8FF" media="(prefers-color-scheme:light)">
 <meta name="theme-color" content="#141218" media="(prefers-color-scheme:dark)">
-<title>积分助手</title>
+<title>积分矩阵</title>
 <style>
 /* ---------- 设计令牌（Material 3 tonal palette） ---------- */
 :root{
@@ -110,20 +110,40 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   display:flex;align-items:baseline;gap:8px;
   font-variant-numeric:tabular-nums;
 }
+/* 注意：[hidden] 在 .total{display:flex} 面前无效（元素自身 display 优先），
+   所以隐藏必须用这条类，而不是 hidden 属性 */
+.total.off{display:none}
 .total .num{
   font-size:42px;font-weight:700;letter-spacing:-.035em;line-height:1.06;
   background:linear-gradient(120deg,var(--primary),#8B4DFF 90%);
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
 }
-/* 占位/说明文字（不合计、—）：不要走渐变，也不用 42px 大字，
-   否则「不合计」三个字会比余额本身还抢眼 */
+/* 占位说明已改为整行隐藏 + 一句解释（见 total-note），
+   这里保留最小化样式，避免残留的 .dash 元素被渐变裁成一根横条。 */
 .total .num.dash{
-  background:none;-webkit-text-fill-color:var(--on-surface-v);
-  color:var(--on-surface-v);letter-spacing:.01em;
-  font-size:19px;font-weight:600;
+  background:none!important;-webkit-text-fill-color:var(--on-surface-v)!important;
+  color:var(--on-surface-v);font-size:15px;font-weight:600;
 }
 .total .unit{font-size:14px;color:var(--on-surface-v);font-weight:500}
-.chips{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+/* 混合单位时的解释性说明：一行小字，说明为什么没有总数。
+   有总数时这行隐藏、大字显示；没有总数时反过来——大字整行隐藏，
+   只留这句说明，避免屏幕上出现一根孤零零的粗横条。 */
+.total-note{
+  font-size:13px;color:var(--on-surface-v);margin-top:2px;line-height:1.55;
+  display:flex;align-items:flex-start;gap:7px;
+}
+.total-note b{color:var(--on-surface);font-weight:640}
+.total-note svg{width:15px;height:15px;flex:0 0 auto;margin-top:2px;opacity:.8}
+.chips-row{display:flex;align-items:center;gap:8px;margin-top:12px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
+/* 视图密度切换：放在「N 个正常 / N 个已签」右侧 */
+.viewbtn{
+  width:34px;height:34px;border-radius:var(--r-pill);border:0;padding:0;flex:0 0 auto;
+  display:grid;place-items:center;background:var(--surface-2);color:var(--on-surface-v);
+  transition:transform .14s,background .16s,color .16s;
+}
+.viewbtn:active{transform:scale(.92);background:var(--surface-3);color:var(--on-surface)}
+.viewbtn svg{width:17px;height:17px}
 .chip{
   display:inline-flex;align-items:center;gap:6px;
   padding:6px 12px 6px 9px;border-radius:var(--r-pill);
@@ -183,6 +203,55 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .pill.task{background:var(--surface-2);color:var(--on-surface-v)}
 .pill.task:active{background:var(--surface-3)}
 .c-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+
+/* 紧凑视图：一行一个账号。
+   用户反馈「平铺的卡片太大、太占地方」，卡片视图保留（信息全），
+   紧凑视图给「只想扫一眼签没签」的场景，一屏能装下十几个账号。 */
+.list.compact{gap:7px}
+.row-item{
+  display:flex;align-items:center;gap:10px;
+  background:var(--card);border:1px solid var(--outline-v);
+  border-radius:var(--r-md);padding:9px 12px;box-shadow:var(--shadow);
+  animation:rise .26s cubic-bezier(.2,.8,.2,1) both;
+}
+.row-item .avatar{width:30px;height:30px;border-radius:9px;font-size:12.5px}
+.row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0}
+.row-main .t{font-size:13.5px;font-weight:620;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-main .d{font-size:11.5px;color:var(--on-surface-v);margin-top:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-main .d.bad{color:var(--bad)}
+.row-bal{flex:0 0 auto;text-align:right;font-variant-numeric:tabular-nums;
+  display:flex;align-items:baseline;gap:3px}
+.row-bal .n{font-size:15.5px;font-weight:680;letter-spacing:-.02em}
+.row-bal .u{font-size:10.5px;color:var(--on-surface-v)}
+.row-act{flex:0 0 auto;display:flex;align-items:center;gap:5px}
+/* 紧凑视图里的操作按钮做成小号胶囊，高度和行高对齐 */
+.row-act .pill{padding:5px 11px;font-size:12px;border-radius:var(--r-pill)}
+.row-act .pill.mute{background:var(--surface-2);color:var(--on-surface-v)}
+.row-item.err .row-main .t{color:var(--bad)}
+
+/* 拖动排序：长按任意卡片后可上下拖动更换位置 */
+.card, .row-item{cursor:grab}
+.card.longpressed, .row-item.longpressed{
+  box-shadow:var(--shadow-lg);
+  transform:scale(1.02);
+  border-color:color-mix(in srgb,var(--primary) 55%,var(--outline-v));
+  z-index:2;position:relative;
+  transition:transform .16s,box-shadow .16s;
+}
+.card.dragging, .row-item.dragging{opacity:.92}
+body.reordering{cursor:grabbing}
+body.reordering *{user-select:none!important;-webkit-user-select:none!important}
+/* 拖动时让出位的那一行，用虚线占位提示 */
+.card.drop-slot, .row-item.drop-slot{
+  border:1px dashed color-mix(in srgb,var(--primary) 45%,transparent);
+  background:color-mix(in srgb,var(--primary) 6%,var(--card));
+}
+.order-tip{
+  font-size:11.5px;color:var(--on-surface-v);text-align:center;
+  padding:0 0 4px;
+}
 
 /* 骨架屏：首屏立刻有结构，避免白屏等待的「卡」感 */
 .skel{height:118px;border-radius:var(--r-xl);background:var(--card);border:1px solid var(--outline-v);
@@ -331,6 +400,38 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .task-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .task-title{font-size:13.5px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .task-sub{font-size:11.5px;color:var(--on-surface-v);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 抽奖弹层 */
+.lot-card{
+  background:linear-gradient(135deg,color-mix(in srgb,var(--primary) 14%,var(--card)),var(--card));
+  border:1px solid var(--outline-v);border-radius:var(--r-lg);
+  padding:16px;margin-bottom:12px;text-align:center;
+}
+.lot-cap{font-size:12.5px;color:var(--on-surface-v);margin-bottom:2px}
+.lot-remain{
+  font-size:38px;font-weight:720;letter-spacing:-.03em;line-height:1.1;
+  color:var(--on-surface-v);font-variant-numeric:tabular-nums;
+}
+.lot-remain.on{
+  background:linear-gradient(120deg,var(--primary),#8B4DFF 90%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.lot-prizes{margin-bottom:12px}
+.lot-empty{font-size:12.5px;color:var(--on-surface-v);text-align:center;padding:10px 0 14px}
+.lot-prize{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:var(--surface-1);border-radius:var(--r-md);margin-bottom:8px;
+  animation:rise .28s cubic-bezier(.2,.8,.2,1) both;
+}
+.lot-ic{
+  width:30px;height:30px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+  background:var(--warn-c);color:var(--warn);
+}
+.lot-ic svg{width:17px;height:17px}
+.lot-tx{flex:1;min-width:0;display:flex;flex-direction:column}
+.lot-tx b{font-size:13.5px;font-weight:640;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lot-tx i{font-style:normal;font-size:11.5px;color:var(--ok);margin-top:1px}
+/* 抽奖按钮用描边风格，与「任务」区分主次 */
+.pill.lottery{background:var(--warn-c);color:var(--warn)}
 .sect-h{font-size:13px;font-weight:680;color:var(--on-surface-v);
   margin:18px 4px 10px;letter-spacing:.02em}
 .sect-h:first-child{margin-top:6px}
@@ -385,7 +486,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 <div class="appbar" id="appbar">
   <div class="brand">
     <div class="logo">{{ICON:spark}}</div>
-    <h1>积分助手</h1>
+    <h1>积分矩阵</h1>
   </div>
   <button class="iconbtn" id="btnRefresh" aria-label="刷新">{{ICON:refresh}}</button>
   <button class="iconbtn" id="btnTheme" aria-label="切换主题模式">{{ICON:sun}}</button>
@@ -394,8 +495,15 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
 <div class="hero">
   <div class="kicker">全部账号合计</div>
-  <div class="total"><span class="num" id="total">—</span><span class="unit" id="total-unit">积分</span></div>
-  <div class="chips" id="chips"></div>
+  <div class="total" id="total-row"><span class="num" id="total">—</span><span class="unit" id="total-unit">积分</span></div>
+  <!-- 没有总数时（无账号 / 全部异常 / 单位不同）不画破折号：
+       28px 的「—」在手机上就是一根横条，看着像分隔线或渲染错误。
+       改为直接给一句话，把「为什么没有总数」讲明白。 -->
+  <div class="total-note" id="total-note" hidden></div>
+  <div class="chips-row">
+    <div class="chips" id="chips"></div>
+    <button class="viewbtn" id="btnView" aria-label="切换显示密度">{{ICON:list}}</button>
+  </div>
 </div>
 
 <div class="list" id="list"></div>
@@ -569,6 +677,139 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     }
   }
 
+  /* ---------- 视图密度：卡片 / 紧凑列表 ----------
+     用户反馈「平铺的标签太大占地方」，所以给一个开关：
+       card = 现在的完整卡片（能看余额、任务、签到，信息最全）
+       list = 一行一个账号（一屏十几个，扫一眼就知道签没签）
+     选择持久化，默认仍是卡片（信息更完整，首次使用体验更好）。 */
+  var VIEW_KEY = 'points_view';
+  var VIEWS = ['card', 'list'];
+  function readView(){
+    var v = '';
+    try { v = localStorage.getItem(VIEW_KEY) || ''; } catch (e) {}
+    return VIEWS.indexOf(v) >= 0 ? v : 'card';
+  }
+  function applyView(force){
+    var v = force || readView();
+    var btn = $('btnView');
+    if (btn){
+      // 图标显示「切过去之后会是什么」：当前是卡片就显示列表图标
+      btn.innerHTML = ICON(v === 'card' ? 'list' : 'grid');
+      btn.setAttribute('aria-label', v === 'card' ? '切换为紧凑显示' : '切换为卡片显示');
+      btn.title = v === 'card' ? '紧凑显示' : '卡片显示';
+    }
+    var list = $('list');
+    if (list) list.className = 'list' + (v === 'list' ? ' compact' : '');
+    return v;
+  }
+  function cycleView(){
+    var cur = readView();
+    var next = (cur === 'card') ? 'list' : 'card';
+    try { localStorage.setItem(VIEW_KEY, next); } catch (e) {}
+    applyView(next);
+    render();
+    toast(next === 'list' ? '已切换为紧凑显示' : '已切换为卡片显示');
+    return next;
+  }
+
+  /* ---------- 拖动排序 ----------
+     手机上「长按 → 拖动」是最自然的重排方式。这里不引第三方库，
+     自己用 pointer 事件做：
+       1) 长按 380ms 进入「排序态」（避免和下拉刷新/点击冲突）
+       2) 排序态里跟手移动，用 transform 位移，不触发重排
+       3) 松手后按新顺序提交 /api/account/reorder，失败则回滚重渲染
+     拖动只在已渲染的卡片之间换位，所以直接操作 DOM 顺序即可。 */
+  var dragState = null;
+  var DRAG_HOLD = 380;
+
+  function rowKey(node){ return node.getAttribute('data-key'); }
+
+  function beginTrack(node, r){
+    node.addEventListener('pointerdown', function(e){
+      if (e.button != null && e.button !== 0) return;
+      // 按钮/输入框上的按下不触发排序（否则点签到会变成拖动）
+      if (e.target.closest('button')) return;
+      var startY = e.clientY, startX = e.clientX, timer = null, active = false;
+      var lastY = startY;
+      function cleanup(){
+        clearTimeout(timer);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+      }
+      timer = setTimeout(function(){
+        active = true;
+        node.classList.add('longpressed', 'dragging');
+        document.body.classList.add('reordering');
+        dragState = { node: node, key: rowKey(node) };
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e2) {} }
+      }, DRAG_HOLD);
+      function onMove(ev){
+        var dy = ev.clientY - startY;
+        if (!active){
+          // 还没到长按时间就移动了：认为用户想滚动，取消长按
+          if (Math.abs(dy) > 8 || Math.abs(ev.clientX - startX) > 8){ cleanup(); }
+          return;
+        }
+        ev.preventDefault();
+        node.style.transform = 'translateY(' + dy + 'px)';
+        // 找应该插入到哪个兄弟节点之前
+        var siblings = Array.prototype.slice.call(node.parentNode.children).filter(function(n){
+          return n !== node;
+        });
+        var insertBefore = null;
+        for (var i = 0; i < siblings.length; i++){
+          var box = siblings[i].getBoundingClientRect();
+          if (ev.clientY < box.top + box.height / 2){ insertBefore = siblings[i]; break; }
+        }
+        siblings.forEach(function(n){ n.classList.remove('drop-slot'); });
+        if (insertBefore) insertBefore.classList.add('drop-slot');
+        else if (siblings.length) siblings[siblings.length - 1].classList.add('drop-slot');
+        node._insertBefore = insertBefore;
+        lastY = ev.clientY;
+      }
+      function onUp(){
+        cleanup();
+        if (!active) return;
+        active = false;
+        document.body.classList.remove('reordering');
+        var target = node._insertBefore || null;
+        node.classList.remove('longpressed', 'dragging');
+        node.style.transform = '';
+        Array.prototype.forEach.call(node.parentNode.children, function(n){
+          n.classList.remove('drop-slot');
+        });
+        var parent = node.parentNode;
+        if (target && target !== node.nextSibling) parent.insertBefore(node, target);
+        else if (!target) parent.appendChild(node);
+        dragState = null;
+        // 顺序变化后提交给后端
+        var keys = Array.prototype.slice.call(parent.children)
+          .map(function(n){ return n.getAttribute('data-key'); })
+          .filter(Boolean)
+          .map(function(k){
+            var p = k.split('|');
+            return { provider: p[0], account_id: p.slice(1).join('|') };
+          });
+        if (keys.length < 2) { render(); return; }
+        var snapshot = parent.innerHTML;
+        post('/api/account/reorder', { keys: keys }).then(function(res){
+          if (!res || !res.ok){ throw new Error((res && res.error) || '排序失败'); }
+          toast('顺序已保存');
+          load(true);
+        }).catch(function(err){
+          toast(err.message || '排序失败');
+          // 回滚：把 DOM 还原成拖动前的样子，再拉一次真实数据
+          parent.innerHTML = snapshot;
+          load(true);
+        });
+      }
+      document.addEventListener('pointermove', onMove, { passive: false });
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    });
+  }
+
   /* ---------- 主题：跟随系统 / 强制浅色 / 强制深色 ---------- */
   // 三态循环：system → light → dark → system。
   // 选择持久化到 localStorage；同时把颜色告诉壳层，让状态栏跟着变
@@ -653,7 +894,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   function backupName(){
     var d = new Date();
     function p(n){ return (n < 10 ? '0' : '') + n; }
-    return '积分助手备份-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+    return '积分矩阵备份-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
            '-' + p(d.getHours()) + p(d.getMinutes()) + '.json';
   }
   function saveBackupFile(){
@@ -766,9 +1007,24 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     if (fail) chip('bad', fail + ' 个异常');
   }
 
+  // 「任务 / 抽奖」这类入口按钮：样式统一，图标 + 文字都小一号
+  function pillBtn(icon, text, cls, label, onClick){
+    var b = document.createElement('button');
+    b.className = 'pill ' + cls;
+    b.innerHTML = ICON(icon) + '<span>' + esc(text) + '</span>';
+    if (label) b.setAttribute('aria-label', label);
+    b.addEventListener('click', function(e){
+      if (e) e.stopPropagation();
+      onClick(e);
+    });
+    return b;
+  }
+
+  // 账号卡片（完整视图）
   function cardOf(r){
     var card = document.createElement('div');
     card.className = 'card' + (r.error ? ' err' : '');
+    card.setAttribute('data-key', (r.provider || '') + '|' + (r.account_id || ''));
 
     var top = document.createElement('div'); top.className = 'c-top';
     var av = document.createElement('div'); av.className = 'avatar';
@@ -809,19 +1065,22 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     else stTxt.textContent = r.checked_in ? '今天已签到' : '今天还没签';
     st.appendChild(stTxt);
 
-    // 右侧按钮组：任务（仅支持平台）+ 签到
+    // 右侧按钮组：任务 / 抽奖（仅支持平台）+ 签到
     var btns = document.createElement('div');
     btns.className = 'c-actions';
 
     if (r.has_tasks && !r.error){
-      var taskBtn = document.createElement('button');
-      taskBtn.className = 'pill task';
-      taskBtn.textContent = '任务';
-      taskBtn.setAttribute('aria-label', '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务');
-      taskBtn.addEventListener('click', function(){
-        openTasks(r);
-      });
-      btns.appendChild(taskBtn);
+      btns.appendChild(pillBtn('task', '任务', 'task',
+        '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务',
+        function(){ openTasks(r); }));
+    }
+    // 抽奖入口：百度搭子签到送抽奖机会，必须能点进去看剩余次数与奖品。
+    // 这里不判断 r.error：余额查询失败（比如刚过期）不代表抽奖也一定失败，
+    // 用户点进去看真实状态比事先替他判定更有用。
+    if (r.has_lottery){
+      btns.appendChild(pillBtn('ticket', '抽奖', 'lottery',
+        '查看 ' + (r.provider_name || r.provider || '') + ' 抽奖',
+        function(){ openLottery(r); }));
     }
 
     var btn = document.createElement('button');
@@ -839,6 +1098,55 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     return card;
   }
 
+  // 账号行（紧凑视图）：一行之内放完头像 / 名称 / 余额 / 操作
+  function rowOf(r){
+    var row = document.createElement('div');
+    row.className = 'row-item' + (r.error ? ' err' : '');
+    row.setAttribute('data-key', (r.provider || '') + '|' + (r.account_id || ''));
+
+    var av = document.createElement('div'); av.className = 'avatar';
+    var hue = hueOf(r.account_id || r.provider);
+    av.style.background = 'linear-gradient(135deg,hsl(' + hue + ',72%,58%),hsl(' + ((hue + 34) % 360) + ',72%,50%))';
+    av.textContent = initials(r.provider_name || r.provider || r.label || r.account_id);
+    row.appendChild(av);
+
+    var main = document.createElement('div'); main.className = 'row-main';
+    var t = document.createElement('div'); t.className = 't';
+    t.textContent = (r.provider_name || r.provider || '') + ' · ' + (r.label || r.account_id || '');
+    var d = document.createElement('div'); d.className = 'd' + (r.error ? ' bad' : '');
+    if (r.error) d.textContent = r.error;
+    else if (r.detail) d.textContent = r.detail;
+    else d.textContent = r.checked_in ? '今天已签到' : '今天还没签';
+    main.appendChild(t); main.appendChild(d);
+    row.appendChild(main);
+
+    var bal = document.createElement('div'); bal.className = 'row-bal';
+    var bn = document.createElement('span'); bn.className = 'n';
+    bn.textContent = r.error ? '—' : fmt(r.balance);
+    var bu = document.createElement('span'); bu.className = 'u'; bu.textContent = r.unit || '积分';
+    bal.appendChild(bn); bal.appendChild(bu);
+    row.appendChild(bal);
+
+    var act = document.createElement('div'); act.className = 'row-act';
+    if (r.has_tasks || r.has_lottery){
+      // 紧凑视图只放一个入口，避免一行塞三个按钮；有抽奖优先展示抽奖
+      var moreEntry = pillBtn(r.has_lottery ? 'ticket' : 'task', '', 'mute',
+        r.has_lottery ? '抽奖' : '任务',
+        function(){ if (r.has_lottery) openLottery(r); else openTasks(r); });
+      moreEntry.innerHTML = ICON(r.has_lottery ? 'ticket' : 'task');
+      act.appendChild(moreEntry);
+    }
+    var btn = document.createElement('button');
+    btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
+    btn.textContent = r.error ? '重试' : (r.checked_in ? '已签' : '签到');
+    btn.setAttribute('aria-label', (r.error ? '重试 ' : (r.checked_in ? '已签到 ' : '签到 ')) + (r.provider_name || r.provider || ''));
+    if (r.checked_in) btn.disabled = true;
+    btn.addEventListener('click', function(){ doCheckin(r.account_id, btn); });
+    act.appendChild(btn);
+    row.appendChild(act);
+    return row;
+  }
+
   function render(){
     var rows = state.rows;
     var list = $('list');
@@ -853,17 +1161,41 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       }
     }
     // 全异常或没有账号时显示「—」而不是 0：0 会被误读成「余额为零」。
-    // 多家单位不同（灵石 / 积分）时也不能相加，直接显示「—」，否则 100 灵石 +
-    // 12.5 积分 会变成一个没有任何含义的 112.5。
     var mixed = (unit === '合计');
     var tn = $('total');
     var showDash = (!rows.length || !healthy || mixed);
-    // 单位不同（积分 / 灵石）时不能相加，写「—」在 42px 下就是一根粗横条，
-    // 看着像分隔线。这里直接写「不合计」，用户一眼明白为什么没有总数。
-    tn.textContent = showDash ? (mixed ? '不合计' : '—') : fmt(total);
-    tn.className = 'num' + (showDash ? ' dash' : '');
+    // 没有总数时整行大字都藏起来，只用下面那句说明，避免出现一根粗横条
+    var row = $('total-row');
+    if (row) row.className = 'total' + (showDash ? ' off' : '');
+    if (!showDash){
+      tn.textContent = fmt(total);
+      tn.className = 'num';
+    }
     var tu = $('total-unit');
-    if (tu) tu.textContent = mixed ? '' : (unit || '积分');
+    if (tu) tu.textContent = showDash ? '' : (unit || '积分');
+    // 没有总数时给一句能看懂的解释（用户反馈过「不合计」三个字看不懂）
+    var note = $('total-note');
+    if (note){
+      if (!showDash){
+        note.hidden = true;
+        note.textContent = '';
+      } else {
+        note.hidden = false;
+        var msg;
+        if (!rows.length){
+          msg = '还没有账号，添加后这里会显示 <b>各平台积分的合计</b>。';
+        } else if (mixed){
+          var units = {};
+          for (var q = 0; q < rows.length; q++){ if (!rows[q].error) units[rows[q].unit || '积分'] = 1; }
+          var names = Object.keys(units);
+          msg = '各账号的单位不同（<b>' + esc(names.join(' / ')) + '</b>），'
+              + '加起来没有意义，因此不显示总数。每个账号的具体数值见下方列表。';
+        } else {
+          msg = '所有账号都没读到数据，暂时无法合计。下拉可重试。';
+        }
+        note.innerHTML = ICON('warn') + '<span>' + msg + '</span>';
+      }
+    }
     renderChips(rows);
 
     if (!rows.length){
@@ -879,10 +1211,17 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     }
 
     // 一次插入，避免逐条 append 引起多次重排
+    var view = applyView();
     var frag = document.createDocumentFragment();
-    for (var k = 0; k < rows.length; k++) frag.appendChild(cardOf(rows[k]));
+    for (var k = 0; k < rows.length; k++){
+      frag.appendChild(view === 'list' ? rowOf(rows[k]) : cardOf(rows[k]));
+    }
     list.textContent = '';
     list.appendChild(frag);
+    // 挂上长按拖动（在插入之后才能拿到真实节点）
+    for (var m = 0; m < list.children.length; m++){
+      beginTrack(list.children[m]);
+    }
     $('btnAll').disabled = state.busy;
   }
 
@@ -895,6 +1234,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       if (p) {
         rows[j].provider_name = p.name;
         rows[j].has_tasks = !!p.tasks;
+        rows[j].has_lottery = !!p.lottery;
       }
     }
     return rows;
@@ -1064,6 +1404,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   });
   $('btnAll').addEventListener('click', checkinAll);
   $('btnTheme').addEventListener('click', cycleTheme);
+  var vb = $('btnView');
+  if (vb) vb.addEventListener('click', cycleView);
   $('btnAdd').addEventListener('click', openAddSheet);
   $('btnSettings').addEventListener('click', openSettings);
 
@@ -1450,6 +1792,116 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     }
   }
 
+  /* ---------- 抽奖（百度搭子等） ----------
+     用户原话：「做了抽奖但是没做按钮啊，我不能点按钮进去看抽奖状态和抽到什么奖，
+     没有手动领取入口」。所以这个弹层要给出三件事：
+       1) 还剩几次机会（大字，一眼看到）
+       2) 抽到了什么（本次会话的奖品列表）
+       3) 手动抽一次的按钮（次数为 0 时禁用并说明原因） */
+  function openLottery(r){
+    var name = platformName(r.provider);
+    var box = null, remainEl = null, prizeBox = null, drawBtn = null;
+    var history = [];
+
+    openSheet(name + ' · 抽奖', r.label || r.account_id || '', function(body, close){
+      // 顶部状态卡
+      var card = el('div', 'lot-card');
+      remainEl = el('div', 'lot-remain', '…');
+      var cap = el('div', 'lot-cap', '剩余抽奖机会');
+      card.appendChild(cap);
+      card.appendChild(remainEl);
+      body.appendChild(card);
+
+      prizeBox = el('div', 'lot-prizes');
+      body.appendChild(prizeBox);
+
+      drawBtn = el('button', 'btn filled sm', '立即抽奖');
+      drawBtn.style.width = '100%';
+      drawBtn.disabled = true;
+
+      // setRemain 必须在按钮的 click 闭包里可用，所以定义在监听器之前
+      function setRemain(n){
+        remainEl.textContent = String(n == null ? '—' : n);
+        remainEl.className = 'lot-remain' + (n > 0 ? ' on' : '');
+        drawBtn.disabled = !(n > 0);
+        drawBtn.textContent = n > 0 ? '立即抽奖' : '暂无抽奖机会';
+      }
+      function renderPrizes(){
+        prizeBox.textContent = '';
+        if (!history.length){
+          prizeBox.appendChild(el('div', 'lot-empty', '还没抽过。抽中的奖品会显示在这里。'));
+          return;
+        }
+        history.forEach(function(it){
+          var row = el('div', 'lot-prize');
+          var ic = el('div', 'lot-ic'); ic.innerHTML = ICON('trophy');
+          row.appendChild(ic);
+          var tx = el('div', 'lot-tx');
+          tx.appendChild(el('b', '', it.prize));
+          if (it.gain) tx.appendChild(el('i', '', it.gain));
+          row.appendChild(tx);
+          prizeBox.appendChild(row);
+        });
+      }
+
+      drawBtn.addEventListener('click', function(){
+        drawBtn.disabled = true;
+        drawBtn.textContent = '抽奖中…';
+        post('/api/lottery/draw', { account: r.account_id }).then(function(res){
+          if (res && res.error && !res.ok){
+            toast(res.error);
+          } else if (res && res.ok){
+            var gainTxt = res.gain ? '+' + fmt(res.gain) + ' ' + (res.unit || '积分') : '';
+            history.unshift({ prize: res.prize || '抽中一次', gain: gainTxt });
+            toast('抽中：' + (res.prize || '奖励') + (gainTxt ? '，' + gainTxt : ''));
+          } else {
+            toast('没有抽到奖励');
+          }
+          if (res && res.remaining != null) setRemain(res.remaining);
+          renderPrizes();
+          drawBtn.textContent = '立即抽奖';
+          drawBtn.disabled = !(res && res.remaining > 0);
+          load(true);
+        }).catch(function(e){
+          toast('抽奖失败：' + e.message);
+          drawBtn.textContent = '立即抽奖';
+          drawBtn.disabled = false;
+        });
+      });
+      body.appendChild(drawBtn);
+
+      var tip = el('div', 'sheet-sub',
+        '签到会送抽奖机会；「一键签到」会自动把这些机会抽掉，这里可以看结果或补抽。');
+      tip.style.paddingTop = '10px';
+      body.appendChild(tip);
+
+      // refresh 定义在回调内部：它要用 setRemain，而 setRemain 依赖这里的 DOM 引用。
+      // 放到回调外面会变成 ReferenceError（实测踩过：面板一直显示 —）。
+      function refresh(){
+        j('/api/lottery/status?account=' + encodeURIComponent(r.account_id)).then(function(res){
+          if (!remainEl) return;
+          if (res && res.ok){ setRemain(res.remaining); }
+          else {
+            remainEl.textContent = '—';
+            remainEl.className = 'lot-remain';
+            drawBtn.disabled = true;
+            drawBtn.textContent = '无法查询';
+            toast((res && res.error) || '查询失败');
+          }
+        }).catch(function(e){
+          if (!remainEl) return;
+          remainEl.textContent = '—';
+          drawBtn.disabled = true;
+          toast('查询失败：' + e.message);
+        });
+      }
+
+      renderPrizes();
+      refresh();
+    });
+
+  }
+
   /* ---------- 卡片右上角：单账号操作 ---------- */
   function openAccountMenu(r){
     openSheet(platformName(r.provider), r.label || r.account_id || '', function(body, close){
@@ -1621,6 +2073,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   /* ---------- 启动 ---------- */
   // 主题要在首屏渲染前就定好，否则暗色用户会先看到一帧白底再翻黑。
   applyTheme(readTheme());
+  // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
+  applyView(readView());
   showSkeleton();
   load(true);
   // reload 续跑：iOS 后台回前台时网络进程被回收，fetch 持续失败 → autoCheckin
@@ -1674,7 +2128,14 @@ function ICON(name){
     // 主题三态：太阳 = 浅色 / 月亮 = 深色 / 半圆 = 跟随系统
     sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5M18.6 18.6l-1.5-1.5M6.9 6.9L5.4 5.4"/>',
     moon:'<path d="M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8z"/>',
-    auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17" fill="currentColor" stroke="none"/>'
+    auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17" fill="currentColor" stroke="none"/>',
+    // 视图密度：list = 三行横线（紧凑列表）/ grid = 四格（卡片平铺）
+    list:'<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4" cy="6.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="17.5" r="1.1" fill="currentColor" stroke="none"/>',
+    grid:'<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
+    // 抽奖：奖池里的票根（齿轮状的太阳/齿轮都不合适，用票根最直观）
+    ticket:'<path d="M4 8.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1.6a2 2 0 0 0 0 3.8v1.6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1.6a2 2 0 0 0 0-3.8z"/><path d="M13.5 7.5v9" stroke-dasharray="2 2.4"/>',
+    trophy:'<path d="M8 4.5h8v4a4 4 0 0 1-8 0z"/><path d="M8 5.5H5.5v1.5A3 3 0 0 0 8 10"/><path d="M16 5.5h2.5v1.5A3 3 0 0 1 16 10"/><path d="M12 12.5v3.5"/><path d="M8.5 19.5h7"/>',
+    grip:'<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
 }
@@ -1688,7 +2149,7 @@ var indexHTML = buildIndex()
 
 func buildIndex() string {
 	out := indexTmpl
-	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task", "sun", "moon", "auto"} {
+	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task", "sun", "moon", "auto", "list", "grid", "ticket", "trophy"} {
 		out = strings.ReplaceAll(out, "{{ICON:"+name+"}}", iconSVG(name))
 	}
 	return out

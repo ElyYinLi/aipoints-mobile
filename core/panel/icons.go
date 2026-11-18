@@ -37,6 +37,19 @@ func iconSVG(name string) string {
 		"sun":  `<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5M18.6 18.6l-1.5-1.5M6.9 6.9L5.4 5.4"/>`,
 		"moon": `<path d="M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8z"/>`,
 		"auto": `<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>`,
+		// 视图密度：list = 三行条目 / grid = 四格平铺
+		"list": `<path d="M8 6.5h12M8 12h12M8 17.5h12"/>
+		         <circle cx="4" cy="6.5" r="1.1" fill="currentColor" stroke="none"/>
+		         <circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/>
+		         <circle cx="4" cy="17.5" r="1.1" fill="currentColor" stroke="none"/>`,
+		"grid": `<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/>
+		         <rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>`,
+		// 抽奖：票根（虚线是撕口）
+		"ticket": `<path d="M4 8.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1.6a2 2 0 0 0 0 3.8v1.6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1.6a2 2 0 0 0 0-3.8z"/>
+		           <path d="M13.5 7.5v9" stroke-dasharray="2 2.4"/>`,
+		// 奖品：奖杯
+		"trophy": `<path d="M8 4.5h8v4a4 4 0 0 1-8 0z"/><path d="M8 5.5H5.5v1.5A3 3 0 0 0 8 10"/>
+		           <path d="M16 5.5h2.5v1.5A3 3 0 0 1 16 10"/><path d="M12 12.5v3.5"/><path d="M8.5 19.5h7"/>`,
 	}
 	path, ok := body[name]
 	if !ok {

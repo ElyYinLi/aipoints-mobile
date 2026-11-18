@@ -159,6 +159,43 @@ func (s *Server) handleAccountAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "account_id": id})
 }
 
+// handleAccountReorder 保存用户拖拽后的账号顺序。
+//
+// POST /api/account/reorder {"keys":[{"provider":"...","account_id":"..."}, ...]}
+//
+// 前端长按卡片拖动后把整份顺序提交上来，后端只认数组下标，不认具体值，
+// 避免「换了个界面就排出不同结果」。
+func (s *Server) handleAccountReorder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireStore(w) {
+		return
+	}
+	re, ok := s.opt.Store.(store.Reorderer)
+	if !ok {
+		writeJSON(w, map[string]any{"ok": false, "error": "当前存储不支持排序"})
+		return
+	}
+	var in struct {
+		Keys []store.AccountKey `json:"keys"`
+	}
+	if err := readBody(r, &in); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if len(in.Keys) == 0 {
+		writeJSON(w, map[string]any{"ok": false, "error": "缺少 keys"})
+		return
+	}
+	if err := re.Reorder(in.Keys); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // handleAccountDelete 删除账号。
 //
 // POST /api/account/delete {"provider":"...","account_id":"..."}

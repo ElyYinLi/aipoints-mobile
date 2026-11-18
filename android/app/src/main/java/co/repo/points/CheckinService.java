@@ -16,7 +16,7 @@ import android.os.IBinder;
  * 网络直接被掐。要在「用户不开 App 的时候也能签到」，只有前台服务 + 常驻通知
  * 这一条路是稳的（WorkManager 最小间隔 15 分钟，且不保证准时）。
  *
- * 通知文案刻意低调：只写「积分助手运行中」，不暴露平台名。
+ * 通知文案刻意低调：只写「积分矩阵运行中」，不暴露平台名。
  */
 public final class CheckinService extends Service {
 
@@ -45,7 +45,7 @@ public final class CheckinService extends Service {
         }
 
         Notification n = new Notification.Builder(this, CH)
-                .setContentTitle("积分助手运行中")
+                .setContentTitle("积分矩阵运行中")
                 .setContentText("已开启自动签到")
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setOngoing(true)
