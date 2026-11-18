@@ -48,14 +48,19 @@ jobs:
         # vendor/，因为 gomobile 二进制会在子进程里重装 gobind），
         # 只有真正 bind 的那条命令用 GO111MODULE=off。
         # 不能在 /tmp 里 go mod init（系统临时目录下的 go.mod 被 Go 忽略）。
+        #
+        # x/mobile 必须钉版本：上游 @latest 已经要求 go>=1.26，会触发 toolchain
+        # 自动切换，而下载 toolchain 常失败（stream error），job 直接挂。
+        env:
+          XMOBILE_VER: 'v0.0.0-20241204233305-ce44b2716d33'
         run: |
           set -euo pipefail
           GP="$(go env GOPATH)"
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          go install "golang.org/x/mobile/cmd/gomobile@${XMOBILE_VER}"
+          go install "golang.org/x/mobile/cmd/gobind@${XMOBILE_VER}"
 
           TMPMOD="$(mktemp -d)"
-          ( cd "$TMPMOD" && go mod init tmp && go get golang.org/x/mobile/bind@latest >/dev/null )
+          ( cd "$TMPMOD" && go mod init tmp && go get "golang.org/x/mobile@${XMOBILE_VER}" >/dev/null )
           MODVER="$(cd "$TMPMOD" && go list -m -f '{{.Version}}' golang.org/x/mobile)"
           SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER}"
           mkdir -p "$GP/src/golang.org/x"

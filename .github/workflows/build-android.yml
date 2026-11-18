@@ -34,7 +34,12 @@ jobs:
       - name: 准备 gomobile（GOPATH 模式）
         # 目标：gomobile/gobind 二进制能跑，但 core/go.mod 不被 x/mobile 污染。
         #
-        # x/mobile 最新版要求 go>=1.26，直接 bind 会把引擎的 go 指令一起抬高。
+        # 为什么把 x/mobile 钉死在 XMOBILE_VER：
+        #   上游 x/mobile 跟着 Go 主干走，@latest 已经要求 go>=1.26。用 @latest 会让
+        #   go 自动切换 toolchain（`switching to go >= 1.26.0`），而下载 toolchain 的
+        #   那次请求经常炸（实测 stream error: INTERNAL_ERROR），整个 job 直接失败。
+        #   钉一个与 go 1.24 兼容的版本，构建可重复，也不会被上游的 Go 版本要求带走。
+        #
         # 做法分三段，且顺序很关键：
         #   1) 模块模式装二进制；
         #   2) 把 x/mobile 源码铺进 GOPATH/src，并保留它自己的 go.mod——
@@ -44,14 +49,18 @@ jobs:
         #   3) 只有真正执行 bind 的那一条命令才设 GO111MODULE=off。
         #
         # 坑：不能在 /tmp 里 `go mod init`——Go 会忽略系统临时目录下的 go.mod。
+        env:
+          # 2024-12-04 的版本：go.mod 要求 go 1.22.0，与本 flow 的 go 1.24 完全兼容。
+          # 升级这里之前先确认它要求的 go 版本 <= workflow 里的 go-version。
+          XMOBILE_VER: 'v0.0.0-20241204233305-ce44b2716d33'
         run: |
           set -euo pipefail
           GP="$(go env GOPATH)"
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          go install "golang.org/x/mobile/cmd/gomobile@${XMOBILE_VER}"
+          go install "golang.org/x/mobile/cmd/gobind@${XMOBILE_VER}"
 
           TMPMOD="$(mktemp -d)"
-          ( cd "$TMPMOD" && go mod init tmp && go get golang.org/x/mobile/bind@latest >/dev/null )
+          ( cd "$TMPMOD" && go mod init tmp && go get "golang.org/x/mobile@${XMOBILE_VER}" >/dev/null )
           MODVER="$(cd "$TMPMOD" && go list -m -f '{{.Version}}' golang.org/x/mobile)"
           SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER}"
           echo "x/mobile ${MODVER}"
