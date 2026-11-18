@@ -20,6 +20,21 @@ final class LoginCoordinator: ObservableObject {
         "aipy":      "https://www.trustoken.cn/",
     ]
 
+    /// 登录成功后 cookie 所在的站点。与 urls 分开，是因为有些平台的登录
+    /// 会跳到主站/用户中心，初始地址取不到会话：
+    ///   - 百度搭子：会话 cookie 落在 .baidu.com，登录页域名与业务域名不同；
+    ///   - AiPy Pro：用户中心在 trustoken.cn，登录流程常在子域之间跳。
+    /// 取不到时回落到 urls 的 host。
+    private let cookieHosts: [String: String] = [
+        "dumate": "baidu.com",
+        "aipy":   "trustoken.cn",
+        "lingxi": "kdocs.cn",
+    ]
+
+    func cookieHost(for provider: String) -> String? {
+        cookieHosts[provider] ?? url(for: provider)?.host
+    }
+
     func present(provider: String) {
         if urls[provider] != nil {
             pendingProvider = provider

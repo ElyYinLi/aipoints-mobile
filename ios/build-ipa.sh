@@ -50,18 +50,25 @@ fi
 [ -d "$XCF/ios-arm64/Mobile.framework" ] || { echo "xcframework 结构异常"; find "$XCF" -maxdepth 3; exit 1; }
 
 # ---------------------------------------------------------------- 2. Swift
-echo "== 2/6 编译 Swift (SwiftPM, release, ios/arm64) =="
-cp "$ROOT/ios/Package.swift" "$OUT/Package.swift"
-ln -sfn "$ROOT/ios/App/Sources" "$OUT/Sources"
-SWIFT_FLAGS=(
-  -c release
-  --triple "arm64-apple-ios${MIN_IOS}"
-  -Xswiftc -sdk -Xswiftc "$(xcrun --sdk iphoneos --show-sdk-path)"
-  -Xswiftc -target -Xswiftc "arm64-apple-ios${MIN_IOS}"
-  -Xcc -target -Xcc "arm64-apple-ios${MIN_IOS}"
-)
-( cd "$OUT" && swift build "${SWIFT_FLAGS[@]}" )
-BIN="$(cd "$OUT" && swift build "${SWIFT_FLAGS[@]}" --show-bin-path)/Points"
+echo "== 2/6 编译 Swift（xcrun swiftc，目标 ios/arm64）=="
+# 为什么不用 `swift build --triple`：SwiftPM 的 cross-compile 只改 target triple、
+# 不改 sysroot，编 UIKit 时报 "using sysroot for 'MacOSX' but targeting 'iPhone'"
+# 和 "cannot load underlying module for 'UIKit'"。这里直接给 swiftc -sdk。
+SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+TARGET="arm64-apple-ios${MIN_IOS}"
+SWIFT_SOURCES=$(find "$ROOT/ios/App/Sources" -name '*.swift' | sort)
+BIN="$OUT/Points"
+
+# shellcheck disable=SC2086
+xcrun swiftc -sdk "$SDK" -target "$TARGET" \
+  -parse-as-library -O -whole-module-optimization \
+  -F "$XCF/ios-arm64" -framework Mobile \
+  -framework SwiftUI -framework WebKit -framework Security -framework BackgroundTasks \
+  -Xlinker -rpath -Xlinker /usr/lib/swift \
+  $SWIFT_SOURCES \
+  -o "$BIN" 2>&1 | tail -40
+
+[ -f "$BIN" ] || { echo "Swift 编译未产出可执行文件"; find "$OUT" -maxdepth 2 -type f | head -20; exit 1; }
 
 echo "== 3/6 组装 .app =="
 cp "$BIN" "$APP/Points"

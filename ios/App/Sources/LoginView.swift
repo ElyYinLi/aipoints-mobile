@@ -16,6 +16,8 @@ struct LoginView: UIViewControllerRepresentable {
     let url: URL
     /// true 时跳过自动判定，直接把当前站点 cookie 交出去（「完成」按钮路径）
     var forceExtract: Bool = false
+    /// 会话 cookie 可能所在的父域（百度系 / 用户中心系平台用）。空则只看当前 host。
+    var cookieHost: String = ""
     var onFinish: (String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -98,7 +100,11 @@ struct LoginView: UIViewControllerRepresentable {
                     self?.finish(nil); return
                 }
                 store.httpCookieStore.getAllCookies { cookies in
-                    let joined = LoginView.siteCookies(cookies, host: host)
+                    var joined = LoginView.siteCookies(cookies, host: host)
+                    // 当前域拿不到会话时再看父域（如 baidu.com / trustoken.cn）
+                    if joined.isEmpty, !self.parent.cookieHost.isEmpty {
+                        joined = LoginView.siteCookies(cookies, host: self.parent.cookieHost)
+                    }
                     // 登录页本身也可能有 cookie，要求有一定体量才算会话建立
                     if joined.count > 60 {
                         self.finish(joined)
@@ -124,22 +130,28 @@ struct LoginView: UIViewControllerRepresentable {
         func extractNow(_ done: @escaping (String?) -> Void) {
             guard let web else { done(nil); return }
             let host = web.url?.host ?? ""
-            let fallback = parent.url.host ?? ""
+            let candidates = [host, parent.cookieHost, parent.url.host ?? ""].filter { !$0.isEmpty }
             web.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                var joined = LoginView.siteCookies(cookies, host: host)
-                if joined.isEmpty { joined = LoginView.siteCookies(cookies, host: fallback) }
+                var joined = ""
+                for h in candidates {
+                    joined = LoginView.siteCookies(cookies, host: h)
+                    if !joined.isEmpty { break }
+                }
                 DispatchQueue.main.async { done(joined.isEmpty ? nil : joined) }
             }
         }
     }
 
     /// 只保留与给定 host 相关的 cookie，按 `k=v; k2=v2` 拼接。
+    ///
+    /// 双向匹配：host 是 cookie 域的子域（当前页面）、或 cookie 域是 host 的子域
+    /// （传父域 baidu.com 时把 .wenxin.baidu.com 的 cookie 也带上）。
     static func siteCookies(_ cookies: [HTTPCookie], host: String) -> String {
         guard !host.isEmpty else { return "" }
         return cookies
             .filter { ck in
                 let d = ck.domain.hasPrefix(".") ? String(ck.domain.dropFirst()) : ck.domain
-                return host == d || host.hasSuffix("." + d)
+                return host == d || host.hasSuffix("." + d) || d.hasSuffix("." + host)
             }
             // __Host-/__Secure- 前缀是浏览器侧约束，塞进 HTTP 头无意义还占长度
             .filter { !$0.name.hasPrefix("__") }

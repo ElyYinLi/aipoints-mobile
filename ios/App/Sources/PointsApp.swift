@@ -83,7 +83,8 @@ struct LoginSheet: View {
             Group {
                 if let url = LoginCoordinator.shared.url(for: provider) {
                     LoginView(provider: provider, url: url,
-                              forceExtract: forcedExtract) { cookies in
+                              forceExtract: forcedExtract,
+                              cookieHost: LoginCoordinator.shared.cookieHost(for: provider) ?? "") { cookies in
                         onDone(cookies)
                     }
                     .id(forcedExtract)   // 翻转即重建，makeUIViewController 里走强制提取分支

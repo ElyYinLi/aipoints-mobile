@@ -29,15 +29,22 @@ final class Engine: ObservableObject {
         // 后台任务必须早于 didFinishLaunching 结束前注册
         BackgroundRefresh.register()
 
+        // 引擎跑在 Go 的 goroutine 里，起服务、读写账号都会短暂阻塞。
+        // 放到后台队列，避免首帧卡在 MobileStart 上（表现为「启动就卡住」）。
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("engine", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        let reply = MobileStart(dir.path) ?? ""
-        ready = reply.contains("\"ok\":true")
-        status = ready ? "" : "引擎启动失败：\(reply)"
-        if ready { restoreAccounts() }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let reply = MobileStart(dir.path) ?? ""
+            let ok = reply.contains("\"ok\":true")
+            DispatchQueue.main.async {
+                self.ready = ok
+                self.status = ok ? "" : "引擎启动失败：\(reply)"
+                if ok { self.restoreAccounts() }
+            }
+        }
     }
 
     /// 把 Keychain 里的凭据重新灌回引擎。
@@ -64,6 +71,21 @@ final class Engine: ObservableObject {
     func accountsJSON() -> String { MobileListAccounts() ?? "[]" }
 
     func summaryJSON() -> String { MobileSummary() ?? "{}" }
+
+    /// 后台队列上的查询入口（网络请求都在这里发生，别放主线程）。
+    func queryInBackground(_ done: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let out = MobileQueryAll() ?? "[]"
+            DispatchQueue.main.async { done(out) }
+        }
+    }
+
+    /// 从 `points://login?provider=x` 提取平台 id。
+    static func providerID(from url: URL?) -> String? {
+        guard let u = url, u.scheme == "points" else { return nil }
+        return URLComponents(url: u, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "provider" })?.value
+    }
 
     /// 写入账号：secret 先落 Keychain，只把脱敏 JSON 交给引擎。
     ///
