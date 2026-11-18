@@ -44,8 +44,9 @@ jobs:
           go test ./...
 
       - name: 准备 gomobile（GOPATH 模式）
-        # 同 Android：x/mobile 放进 GOPATH/src + GO111MODULE=off，
-        # 避免 x/mobile 的 go>=1.24 要求抬高引擎的 go.mod。
+        # 同 Android：x/mobile 源码铺进 GOPATH/src（保留它自己的 go.mod 和
+        # vendor/，因为 gomobile 二进制会在子进程里重装 gobind），
+        # 只有真正 bind 的那条命令用 GO111MODULE=off。
         # 不能在 /tmp 里 go mod init（系统临时目录下的 go.mod 被 Go 忽略）。
         run: |
           set -euo pipefail
@@ -61,14 +62,18 @@ jobs:
           rm -rf "$GP/src/golang.org/x/mobile"
           cp -r "$SRC" "$GP/src/golang.org/x/mobile"
           chmod -R u+w "$GP/src/golang.org/x/mobile"
-          rm -f "$GP/src/golang.org/x/mobile/go.mod" "$GP/src/golang.org/x/mobile/go.sum"
-          GO111MODULE=off gomobile init
+          ls "$GP/src/golang.org/x/mobile/vendor/golang.org/x/tools" >/dev/null
+          gomobile init
           echo "$GP/bin" >> "$GITHUB_PATH"
 
       - name: 仅验证编译（不打包）
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.make_ipa }}
         run: |
-          cd core && gomobile bind -target=ios -iosversion=15.0 -o /tmp/Mobile.xcframework ./mobile
+          GP="$(go env GOPATH)"
+          mkdir -p "$GP/src/github.com/ElyYinLi/aipoints-mobile"
+          ln -sfn "$PWD/core" "$GP/src/github.com/ElyYinLi/aipoints-mobile/core"
+          ( cd "$GP/src/github.com/ElyYinLi/aipoints-mobile/core" && \
+            GO111MODULE=off gomobile bind -target=ios -iosversion=15.0 -o /tmp/Mobile.xcframework ./mobile )
           ls -la /tmp/Mobile.xcframework
 
       - name: 构建 xcframework + .app + .ipa
