@@ -254,6 +254,15 @@ public final class MainActivity extends Activity {
                 }
             });
         }
+
+        /**
+         * 面板切换主题后调用："dark" / "light"。
+         * 状态栏背景是透明的（页面自己画），这里只改图标明暗。
+         */
+        @android.webkit.JavascriptInterface
+        public void setTheme(final String theme) {
+            ui.post(() -> applySystemBarTheme(theme));
+        }
     }
 
     /** 待写入的内容（SAF 回调里才知道目标 Uri，先暂存）。 */
@@ -286,16 +295,6 @@ public final class MainActivity extends Activity {
             if (web != null) web.evaluateJavascript(js, null);
         } catch (Throwable e) {
             Toast.makeText(this, "读取失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
-    }
-
-        /**
-         * 面板切换主题后调用："dark" / "light"。
-         * 状态栏背景是透明的（页面自己画），这里只改图标明暗。
-         */
-        @android.webkit.JavascriptInterface
-        public void setTheme(final String theme) {
-            ui.post(() -> applySystemBarTheme(theme));
         }
     }
 
