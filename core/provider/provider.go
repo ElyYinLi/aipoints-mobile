@@ -83,6 +83,9 @@ type Meta struct {
 	// Tasks 表示该平台支持「每日任务领取」（实现了 TaskClaimer）。
 	// 前端据此决定是否在账号卡片上显示「任务」按钮。
 	Tasks bool `json:"tasks,omitempty"`
+	// Lottery 表示该平台支持「签到后抽奖」（实现了 LotteryProvider）。
+	// 抽奖随「一键签到」自动执行，前端不需要额外按钮。
+	Lottery bool `json:"lottery,omitempty"`
 }
 
 // Provider 是所有平台适配器必须实现的接口。
@@ -112,7 +115,7 @@ type Task struct {
 }
 
 // TaskClaimer 是「支持每日任务领取」的平台才实现的扩展接口。
-// 不是所有平台都有任务体系（WorkBuddy / 百度搭子等就没有），所以不放进
+// 不是所有平台都有任务体系（WorkBuddy 等就没有），所以不放进
 // Provider 主接口，用类型断言按需启用，前端据此决定是否显示「任务」按钮。
 type TaskClaimer interface {
 	Provider
@@ -120,4 +123,35 @@ type TaskClaimer interface {
 	Tasks(ctx context.Context, c Credential) ([]Task, error)
 	// ClaimTask 领取指定任务奖励，返回本次获得的奖励（平台口径）。
 	ClaimTask(ctx context.Context, c Credential, taskType string) (Result, error)
+}
+
+// DrawStatus 是「每日抽奖」的当前状态。
+type DrawStatus struct {
+	// Remaining 是剩余可抽次数。签到后一般会 +1。
+	Remaining int `json:"remaining"`
+	// Prize 是最近一次抽中的奖品文案（没有则空）。
+	Prize string `json:"prize,omitempty"`
+}
+
+// DrawResult 是一次抽奖的结果。
+type DrawResult struct {
+	OK bool `json:"ok"`
+	// Remaining 抽完后剩余次数（上游没返回时为 -1，表示未知）。
+	Remaining int `json:"remaining"`
+	// Prize 本次抽中的奖品（积分 / 会员 / 实物券等，上游文案原样透传）。
+	Prize string `json:"prize,omitempty"`
+	// Gain 若奖品是积分，这里给出数值；非积分奖品为 0。
+	Gain  float64 `json:"gain,omitempty"`
+	Unit  string  `json:"unit,omitempty"`
+	Error string  `json:"error,omitempty"`
+}
+
+// LotteryProvider 是「支持签到后抽奖」的平台才实现的扩展接口。
+// 百度搭子每次签到给一次抽奖机会，属于这类平台。
+type LotteryProvider interface {
+	Provider
+	// DrawStatus 只读：剩余抽奖次数。
+	DrawStatus(ctx context.Context, c Credential) (DrawStatus, error)
+	// Draw 抽一次奖。实现内部必须保证幂等键每次全新，否则第二次会被判重复。
+	Draw(ctx context.Context, c Credential) (DrawResult, error)
 }

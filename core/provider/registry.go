@@ -55,9 +55,12 @@ func (r *Registry) All() []Meta {
 	out := make([]Meta, 0, len(r.m))
 	for _, p := range r.m {
 		m := p.Meta()
-		// 支持任务领取的平台打个标记，前端据此显示「任务」入口
+		// 能力标记统一从接口推断，provider 自身不必手写，避免漏改。
 		if _, ok := p.(TaskClaimer); ok {
 			m.Tasks = true
+		}
+		if _, ok := p.(LotteryProvider); ok {
+			m.Lottery = true
 		}
 		out = append(out, m)
 	}

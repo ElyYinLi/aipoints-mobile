@@ -215,4 +215,109 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+// ---------- 抽奖（growth-plan 活动） ----------
+
+// 实测（dumate2api stable/src/dumate-web.js）：
+//
+//	GET  /api/dumate/activity/growth-plan/draw/status   剩余次数
+//	POST /api/dumate/activity/growth-plan/draw          抽一次
+//	POST /api/dumate/activity/growth-plan/prize/claim   领实物奖（积分奖自动到账，不用调）
+//
+// 抽奖必须带 request_id 幂等键，且每次必须是全新值——复用同一个值第二次
+// 会被服务端当成重复请求直接拒绝。
+const dumateGrowth = "/api/dumate/activity/growth-plan"
+
+var _ LotteryProvider = (*Dumate)(nil)
+
+// DrawStatus 取剩余抽奖次数。
+func (d *Dumate) DrawStatus(ctx context.Context, c Credential) (DrawStatus, error) {
+	st := DrawStatus{}
+	if c.Cookie == "" {
+		return st, fmt.Errorf("缺少 cookie")
+	}
+	resp, err := d.c.DoJSON(ctx, "GET", d.base(c)+dumateGrowth+"/draw/status", d.headers(c), nil)
+	if err != nil {
+		return st, err
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		return st, fmt.Errorf("登录已失效(%d)", resp.Status)
+	}
+	m, err := resp.JSON()
+	if err != nil {
+		return st, err
+	}
+	if code, ok := httpx.Num(m["code"]); ok && (code == 10001 || code == 10006) {
+		return st, fmt.Errorf("登录已失效")
+	}
+	st.Remaining = int(numOr(digAny(m, "remaining_draws", "remainingDraws"), 0))
+	return st, nil
+}
+
+// Draw 抽一次奖。返回本次奖品与剩余次数。
+func (d *Dumate) Draw(ctx context.Context, c Credential) (DrawResult, error) {
+	res := DrawResult{Remaining: -1, Unit: "积分"}
+	if c.Cookie == "" {
+		res.Error = "缺少 cookie"
+		return res, nil
+	}
+	h := d.headers(c)
+	// x-bce-request-id 与 request_id 都用全新的随机值，避免被判重复
+	h["x-bce-request-id"] = randHex(16)
+	body := map[string]any{"request_id": randHex(16)}
+	resp, err := d.c.DoJSON(ctx, "POST", d.base(c)+dumateGrowth+"/draw", h, body)
+	if err != nil {
+		res.Error = "网络不通，稍后重试"
+		return res, nil
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		res.Error = fmt.Sprintf("登录已失效(%d)", resp.Status)
+		return res, nil
+	}
+	m, err := resp.JSON()
+	if err != nil {
+		res.Error = "响应解析失败: " + err.Error()
+		return res, nil
+	}
+	if code, ok := httpx.Num(m["code"]); ok && code != 0 {
+		if code == 10001 || code == 10006 {
+			res.Error = "登录已失效，请重新登录百度搭子"
+			return res, nil
+		}
+		msg := strOf(pick(m, "msg", "message"))
+		if strings.Contains(msg, "次数") || strings.Contains(msg, "已用完") || strings.Contains(msg, "没有") {
+			res.Error = "没有抽奖机会"
+			return res, nil
+		}
+		res.Error = fmt.Sprintf("业务码 %s: %s", fmtNum(code), msg)
+		return res, nil
+	}
+	// 响应体可能把业务数据放在 data 里，也可能平铺在顶层：两处都探一下
+	dm, _ := digAny(m, "data").(map[string]any)
+	if dm == nil {
+		dm = m
+	}
+	if v, ok := httpx.Num(digAny(m, "remaining_draws", "remainingDraws")); ok {
+		res.Remaining = int(v)
+	} else if v, ok := httpx.Num(digAny(dm, "remaining_draws", "remainingDraws")); ok {
+		res.Remaining = int(v)
+	}
+	// 奖品文案：优先 prize_name，其次是 prize.name / name
+	prize := strOf(digAny(dm, "prize_name", "prizeName"))
+	if prize == "" {
+		if pz, ok := digAny(dm, "prize").(map[string]any); ok {
+			prize = strOf(digAny(pz, "name", "title", "prize_name"))
+		}
+	}
+	if prize == "" {
+		prize = strOf(digAny(dm, "name", "title", "prize_display_name"))
+	}
+	res.Prize = prize
+	// 积分类奖品抽到即到账，取数值用于汇总
+	if v, ok := httpx.Num(digAny(dm, "prize_points", "prizePoints", "points", "reward_points")); ok {
+		res.Gain = v
+	}
+	res.OK = true
+	return res, nil
+}
+
 var _ Provider = (*Dumate)(nil)

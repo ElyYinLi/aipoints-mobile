@@ -243,3 +243,64 @@ func TestStableAccountID(t *testing.T) {
 		t.Fatalf("主键不稳定或长度不对: %s %s %s", a, b, c)
 	}
 }
+
+// TestBackupPreservesExpiresAt token 型平台的过期时间必须随备份走。
+//
+// 之前 secret() 是手写的 map[string]string，expires_at 根本不在里面，
+// 结果 WorkBuddy 账号导出再导入后「过期时间」凭空消失，token 刷新逻辑
+// 就没有依据了。这条测试锁住这个回归。
+func TestBackupPreservesExpiresAt(t *testing.T) {
+	srv, ms := newAPIServer(t)
+
+	add := postJSON(t, srv.URL+"/api/account/add", map[string]any{
+		"provider":      "workbuddy",
+		"label":         "主号",
+		"access_token":  "at-123",
+		"refresh_token": "rt-456",
+		"uid":           "u1",
+		"enterprise_id": "e1",
+		"expires_at":    "2026-12-31T08:00:00Z",
+	})
+	if add["ok"] != true {
+		t.Fatalf("添加失败: %v", add)
+	}
+
+	exp := getJSON(t, srv.URL+"/api/export")
+	accts, _ := exp["accounts"].([]any)
+	if len(accts) != 1 {
+		t.Fatalf("应有 1 条账号，实际 %d", len(accts))
+	}
+	secret, _ := accts[0].(map[string]any)["secret"].(map[string]any)
+	if secret["expires_at"] != "2026-12-31T08:00:00Z" {
+		t.Fatalf("导出必须带 expires_at，实际 %v", secret["expires_at"])
+	}
+	if secret["refresh_token"] != "rt-456" || secret["uid"] != "u1" || secret["enterprise_id"] != "e1" {
+		t.Fatalf("导出缺字段: %v", secret)
+	}
+
+	// 落库的 secret 也要带上，否则重启后一样丢
+	list, _ := ms.List()
+	var stored map[string]any
+	_ = json.Unmarshal(list[0].SecretJSON, &stored)
+	if stored["expires_at"] == nil {
+		t.Fatalf("落库的 secret 丢了 expires_at: %v", stored)
+	}
+
+	backup, _ := json.Marshal(exp)
+	_ = postJSON(t, srv.URL+"/api/account/delete", map[string]any{
+		"provider": "workbuddy", "account_id": add["account_id"],
+	})
+	imp := postJSON(t, srv.URL+"/api/import", map[string]any{"text": string(backup)})
+	if imp["ok"] != true || imp["added"] != float64(1) {
+		t.Fatalf("导入失败: %v", imp)
+	}
+	list, _ = ms.List()
+	var back map[string]any
+	_ = json.Unmarshal(list[0].SecretJSON, &back)
+	if back["expires_at"] != "2026-12-31T08:00:00Z" {
+		t.Fatalf("导入后 expires_at 丢失: %v", back)
+	}
+	if back["access_token"] != "at-123" {
+		t.Fatalf("导入后 token 丢失: %v", back)
+	}
+}

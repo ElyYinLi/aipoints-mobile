@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import Combine
 import BackgroundTasks
+import UniformTypeIdentifiers
 import Mobile
 
 /// 主界面：全屏 WKWebView，加载 Go 引擎在本机回环端口起的面板。
@@ -12,12 +13,16 @@ import Mobile
 struct PointsApp: App {
     @StateObject private var engine = Engine.shared
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var style = StatusBarStyle.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(engine)
-                .preferredColorScheme(nil)   // 跟随系统，HTML 里有 prefers-color-scheme
+                // 主题联动：面板切到浅/深色时，这里跟着切，系统就会自动把状态栏
+                // 的图标（时间/信号/电池）调成深字或白字。之前写死 nil（纯跟随系统），
+                // 用户在面板里手动切换主题后状态栏还是系统色，看着就是「颜色不对」。
+                .preferredColorScheme(style.dark ? .dark : .light)
         }
         .onChange(of: scenePhase) { phase in
             // 进后台时登记一次系统后台刷新机会（iOS 不保证时刻，只作为补签机会）。
@@ -35,7 +40,10 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             PanelWebView(url: engine.panelURL, onReady: { webView = $0 })
-                .ignoresSafeArea(edges: .bottom)
+                // 全屏铺满：底部让内容延伸到 Home Indicator，顶部也交给页面自己
+                // 用 env(safe-area-inset-top) 留白——这样状态栏区域就是页面背景色，
+                // 不会出现「系统默认背景 + 内容区」两截色。
+                .ignoresSafeArea()
             if !engine.ready {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -80,6 +88,18 @@ struct ContentView: View {
 struct LoginTarget: Identifiable {
     let provider: String
     var id: String { provider }
+}
+
+/// StatusBarStyle：页面主题 → 系统界面明暗。
+///
+/// 做法说明：SwiftUI 里控制状态栏最稳的方式不是去 swizzle UIHostingController，
+/// 而是让根视图的 preferredColorScheme 跟着走——系统据此自动把状态栏图标
+/// （时间/信号/电池）刷成深色或白色，导航条、弹出菜单的配色也一并正确。
+/// 面板用 postMessage 把当前主题推过来，这里只管收。
+final class StatusBarStyle: ObservableObject {
+    static let shared = StatusBarStyle()
+    /// true = 深色主题（状态栏白字 / 深色界面元素）
+    @Published var dark: Bool = false
 }
 
 /// 登录容器包装：用户在官方页面登录完，点「完成」才提取 cookie。
@@ -178,6 +198,34 @@ struct PanelWebView: UIViewRepresentable {
                 DispatchQueue.main.async {
                     LoginCoordinator.shared.present(provider: provider)
                 }
+            } else if action == "setTheme" {
+                // 页面切主题：同步系统界面明暗（状态栏字色随之变化），
+                // 并把 WebView 底色跟上——内容小于一屏时下拉不会露出白边。
+                let theme = (body["theme"] as? String) ?? "light"
+                let dark = (theme == "dark")
+                DispatchQueue.main.async {
+                    StatusBarStyle.shared.dark = dark
+                    self.web?.backgroundColor = dark
+                        ? UIColor(red: 0x14/255.0, green: 0x12/255.0, blue: 0x18/255.0, alpha: 1)
+                        : UIColor(red: 0xFB/255.0, green: 0xF8/255.0, blue: 0xFF/255.0, alpha: 1)
+                }
+            } else if action == "saveFile" {
+                let name = (body["name"] as? String) ?? "backup.json"
+                let content = (body["content"] as? String) ?? ""
+                DispatchQueue.main.async { BackupFiles.save(name: name, content: content) }
+            } else if action == "pickFile" {
+                DispatchQueue.main.async {
+                    BackupFiles.pick { text in
+                        // 转成 JSON 字面量再注入，换行/引号不会打断 JS
+                        guard let data = try? JSONSerialization.data(withJSONObject: [text]),
+                              let arr = String(data: data, encoding: .utf8) else { return }
+                        // arr 形如 ["..."]，去掉外层方括号就是合法的字符串字面量
+                        let literal = String(arr.dropFirst().dropLast())
+                        self.web?.evaluateJavaScript(
+                            "window.__pointsOnFilePicked && window.__pointsOnFilePicked(\(literal))",
+                            completionHandler: nil)
+                    }
+                }
             }
         }
 
@@ -230,5 +278,77 @@ enum BackgroundRefresh {
                 schedule()
             }
         }
+    }
+}
+
+/// 备份文件的存/取。
+///
+/// 为什么走原生：手机上在文本框里复制一长串 JSON 是最容易出错的一步——
+/// 选不全、键盘挡住、粘贴到别处就泄露。用系统「文件」面板保存/选择，
+/// 文件真正落到 iCloud Drive 或「我的 iPhone」，换机也能再导回来。
+enum BackupFiles {
+    /// 存到「文件」App：先写临时文件，再弹 UIDocumentPicker 的导出模式。
+    static func save(name: String, content: String) {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try content.write(to: tmp, atomically: true, encoding: .utf8)
+        } catch {
+            toast("保存失败：\(error.localizedDescription)")
+            return
+        }
+        guard let root = topViewController() else { return }
+        let picker = UIDocumentPickerViewController(forExporting: [tmp], asCopy: true)
+        picker.shouldShowFileExtensions = true
+        root.present(picker, animated: true)
+    }
+
+    /// 选一个文件读回文本。
+    static func pick(completion: @escaping (String) -> Void) {
+        guard let root = topViewController() else { return }
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.json, .plainText, .data], asCopy: true)
+        picker.allowsMultipleSelection = false
+        let delegate = PickerDelegate(completion: completion)
+        // 用 objc 关联对象保活，否则 delegate 立刻被释放，回调不会来
+        objc_setAssociatedObject(picker, &pickerKey, delegate, .OBJC_ASSOCIATION_RETAIN)
+        picker.delegate = delegate
+        root.present(picker, animated: true)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        var vc = scene?.windows.first { $0.isKeyWindow }?.rootViewController
+        while let p = vc?.presentedViewController { vc = p }
+        return vc
+    }
+
+    private static func toast(_ msg: String) {
+        DispatchQueue.main.async {
+            guard let vc = topViewController() else { return }
+            let a = UIAlertController(title: nil, message: msg, preferredStyle: .alert)
+            vc.present(a, animated: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { a.dismiss(animated: true) }
+        }
+    }
+}
+
+private var pickerKey: UInt8 = 0
+
+/// UIDocumentPicker 的 delegate。必须强引用存活到用户选完。
+final class PickerDelegate: NSObject, UIDocumentPickerDelegate {
+    private let completion: (String) -> Void
+    init(completion: @escaping (String) -> Void) { self.completion = completion }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        // asCopy: true 时拿到的是沙盒副本，直接读即可，不需要 startAccessing
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        completion(text)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        completion("")
     }
 }

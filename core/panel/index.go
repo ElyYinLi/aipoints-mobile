@@ -36,7 +36,7 @@ const indexTmpl = `<!DOCTYPE html>
   --sat:env(safe-area-inset-top); --sab:env(safe-area-inset-bottom);
 }
 @media (prefers-color-scheme: dark){
-  :root{
+  :root:not([data-theme="light"]){
     --primary:#BAC3FF; --on-primary:#1B2270;
     --primary-c:#343D8C; --on-primary-c:#DEE0FF;
     --surface:#141218; --surface-1:#1D1B22; --surface-2:#232128; --surface-3:#2B2833;
@@ -49,6 +49,19 @@ const indexTmpl = `<!DOCTYPE html>
     --shadow-lg:0 10px 32px rgba(0,0,0,.55);
   }
 }
+/* 手动切到暗色：与系统偏好无关，优先级更高 */
+:root[data-theme="dark"]{
+  --primary:#BAC3FF; --on-primary:#1B2270;
+  --primary-c:#343D8C; --on-primary-c:#DEE0FF;
+  --surface:#141218; --surface-1:#1D1B22; --surface-2:#232128; --surface-3:#2B2833;
+  --card:#1F1D25; --on-surface:#E6E1E9; --on-surface-v:#A8A4B4;
+  --outline:#474452; --outline-v:#332F3C;
+  --ok:#7FD9B0; --ok-c:#12452F;
+  --warn:#F5C25B; --warn-c:#4A3708;
+  --bad:#FFB4AB; --bad-c:#5C1410;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 4px 16px rgba(0,0,0,.28);
+  --shadow-lg:0 10px 32px rgba(0,0,0,.55);
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{height:100%}
 body{
@@ -56,8 +69,8 @@ body{
   font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
   overscroll-behavior-y:contain;   /* 禁掉 WebView 自身的橡皮筋，交给我们自己的下拉刷新 */
-  /* 给固定底栏留空间：底栏高度 ≈ 按钮 48 + 上下内边距 20 + 安全区 */
-  padding-bottom:calc(84px + var(--sab));
+  /* 给固定底栏留空间：底栏高度 ≈ 按钮 43 + 上下内边距 16 + 安全区 */
+  padding-bottom:calc(70px + var(--sab));
 }
 svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
@@ -101,6 +114,13 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   font-size:42px;font-weight:700;letter-spacing:-.035em;line-height:1.06;
   background:linear-gradient(120deg,var(--primary),#8B4DFF 90%);
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+/* 占位/说明文字（不合计、—）：不要走渐变，也不用 42px 大字，
+   否则「不合计」三个字会比余额本身还抢眼 */
+.total .num.dash{
+  background:none;-webkit-text-fill-color:var(--on-surface-v);
+  color:var(--on-surface-v);letter-spacing:.01em;
+  font-size:19px;font-weight:600;
 }
 .total .unit{font-size:14px;color:var(--on-surface-v);font-weight:500}
 .chips{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
@@ -198,28 +218,28 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .empty h2{font-size:16px;color:var(--on-surface);margin:0;font-weight:640}
 .empty p{font-size:13.5px;margin:0;line-height:1.6;max-width:270px}
 
-/* ---------- 底部操作条 ---------- */
+/* ---------- 底部操作条 ----------
+   只有两个动作（一键签到 / 添加账号）：签到把领任务和抽奖一起做完，
+   所以不再需要第三个按钮。按钮也因此可以更矮、更紧凑，少占一截屏幕。 */
 .bar{
   position:fixed;left:0;right:0;bottom:0;z-index:28;
-  padding:10px 14px calc(10px + var(--sab));
+  padding:8px 14px calc(8px + var(--sab));
   background:color-mix(in srgb,var(--surface) 90%,transparent);
   backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);
   border-top:1px solid var(--outline-v);
-  display:flex;gap:10px;
+  display:flex;gap:9px;
 }
 .btn{
-  flex:1;border:0;border-radius:var(--r-pill);padding:14px 16px;
-  font-size:15px;font-weight:650;letter-spacing:.01em;
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  flex:1;border:0;border-radius:var(--r-pill);padding:11px 14px;
+  font-size:14.5px;font-weight:640;letter-spacing:.01em;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
   transition:transform .14s,opacity .14s;
 }
 .btn:active{transform:scale(.975)}
 .btn[disabled]{opacity:.45}
 .btn.tonal{background:var(--surface-2);color:var(--on-surface)}
-/* 领任务按钮：青绿色，与「签到」在视觉上区分任务/签到两类动作 */
-.btn.task{background:var(--ok-c);color:var(--ok)}
 .btn.filled{background:var(--primary);color:var(--on-primary);box-shadow:0 6px 18px color-mix(in srgb,var(--primary) 32%,transparent)}
-.btn svg{width:19px;height:19px}
+.btn svg{width:18px;height:18px}
 
 /* ---------- 底部弹层（添加账号） ---------- */
 .mask{
@@ -327,6 +347,19 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .c-more:active{background:var(--surface-2)}
 .c-more svg{width:18px;height:18px}
 
+/* 分段控件（主题三选一） */
+.seg{
+  display:flex;gap:4px;padding:4px;margin-bottom:12px;
+  background:var(--surface-2);border-radius:var(--r-pill);
+}
+.seg-item{
+  flex:1;border:0;background:transparent;color:var(--on-surface-v);
+  border-radius:var(--r-pill);padding:9px 8px;font-size:13px;font-weight:600;
+  transition:background .16s,color .16s;
+}
+.seg-item.on{background:var(--card);color:var(--on-surface);box-shadow:var(--shadow)}
+.seg-item:active{transform:scale(.97)}
+
 /* Snackbar */
 .snack{
   position:fixed;left:50%;bottom:calc(88px + var(--sab));transform:translate(-50%,24px);
@@ -355,6 +388,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     <h1>积分助手</h1>
   </div>
   <button class="iconbtn" id="btnRefresh" aria-label="刷新">{{ICON:refresh}}</button>
+  <button class="iconbtn" id="btnTheme" aria-label="切换主题模式">{{ICON:sun}}</button>
   <button class="iconbtn" id="btnSettings" aria-label="设置">{{ICON:gear}}</button>
 </div>
 
@@ -368,7 +402,6 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
 <div class="bar">
   <button class="btn tonal" id="btnAll" disabled>{{ICON:checkAll}}一键签到</button>
-  <button class="btn task" id="btnTasks" disabled>{{ICON:task}}领任务</button>
   <button class="btn filled" id="btnAdd">{{ICON:plus}}添加账号</button>
 </div>
 
@@ -536,6 +569,174 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     }
   }
 
+  /* ---------- 主题：跟随系统 / 强制浅色 / 强制深色 ---------- */
+  // 三态循环：system → light → dark → system。
+  // 选择持久化到 localStorage；同时把颜色告诉壳层，让状态栏跟着变
+  // （Android 侧读 window.__pointsTheme，iOS 侧读 theme-color meta）。
+  var THEME_KEY = 'points_theme';
+  var THEMES = ['system', 'light', 'dark'];
+  var THEME_LABEL = { system: '跟随系统', light: '浅色', dark: '深色' };
+
+  function readTheme(){
+    var v = '';
+    try { v = localStorage.getItem(THEME_KEY) || ''; } catch (e) {}
+    return THEMES.indexOf(v) >= 0 ? v : 'system';
+  }
+  // 当前实际生效的是浅还是深（system 时看系统偏好）
+  function effectiveDark(){
+    var t = readTheme();
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches);
+    } catch (e) { return false; }
+  }
+  // 把主题写进 DOM，并同步状态栏颜色给壳层
+  function applyTheme(theme){
+    var t = theme || readTheme();
+    var root = document.documentElement;
+    if (t === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', t);
+    // color-scheme 决定 WebView 里滚动条/表单控件的明暗
+    root.style.colorScheme = (t === 'system') ? 'light dark' : t;
+    syncStatusBar();
+    var btn = $('btnTheme');
+    if (btn){
+      btn.innerHTML = ICON(t === 'dark' ? 'moon' : (t === 'light' ? 'sun' : 'auto'));
+      btn.setAttribute('aria-label', '主题：' + THEME_LABEL[t]);
+      btn.title = '主题：' + THEME_LABEL[t];
+    }
+  }
+  // syncStatusBar：状态栏/导航栏要跟页面背景同色，才不像「贴了一条固定色带」。
+  // 我们自己画背景（edge-to-edge），原生侧只需要把图标明暗调对。
+  function syncStatusBar(){
+    var dark = effectiveDark();
+    var bg = dark ? '#141218' : '#FBF8FF';
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < metas.length; i++){
+      metas[i].setAttribute('content', bg);
+      metas[i].removeAttribute('media');
+    }
+    try {
+      // Android：壳层读这个变量改系统栏
+      window.__pointsTheme = dark ? 'dark' : 'light';
+      if (window.PointsBridge && typeof PointsBridge.setTheme === 'function'){
+        PointsBridge.setTheme(dark ? 'dark' : 'light');
+      }
+      // iOS：壳层读这个变量（WKScriptMessageHandler 同名）
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.PointsBridge){
+        window.webkit.messageHandlers.PointsBridge.postMessage({ action: 'setTheme', theme: dark ? 'dark' : 'light' });
+      }
+    } catch (e) {}
+  }
+  function cycleTheme(){
+    var cur = readTheme();
+    var next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+    applyTheme(next);
+    toast('主题：' + THEME_LABEL[next]);
+    return next;
+  }
+  function setTheme(t){
+    if (THEMES.indexOf(t) < 0) t = 'system';
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+    applyTheme(t);
+    return t;
+  }
+
+  /* ---------- 备份文件读写 ----------
+     手机上复制一长串 JSON 再粘贴是最难受的一步：选中容易错、键盘一挡就看不见。
+     优先走原生「存到文件 / 从文件选」，两条路：
+       1) 壳层桥：Android 走 SAF、iOS 走 UIDocumentPicker（都弹系统文件面板）
+       2) 无桥时退回浏览器能力：Blob 下载 / <input type=file>
+     文件名带日期，方便用户自己认出哪个是最新的。 */
+  function backupName(){
+    var d = new Date();
+    function p(n){ return (n < 10 ? '0' : '') + n; }
+    return '积分助手备份-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+           '-' + p(d.getHours()) + p(d.getMinutes()) + '.json';
+  }
+  function saveBackupFile(){
+    j('/api/export').then(function(d){
+      var text = JSON.stringify(d, null, 2);
+      var name = backupName();
+      // 1) iOS：WKScriptMessageHandler（postMessage 形式，可带参数）
+      try {
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.PointsBridge){
+          window.webkit.messageHandlers.PointsBridge.postMessage(
+            { action: 'saveFile', name: name, content: text });
+          toast('请选择保存位置');
+          return;
+        }
+      } catch (e) {}
+      // 2) Android：addJavascriptInterface 同步方法
+      try {
+        if (window.PointsBridge && typeof PointsBridge.saveFile === 'function'){
+          PointsBridge.saveFile(name, text);
+          toast('请选择保存位置');
+          return;
+        }
+      } catch (e) {}
+      // 3) 浏览器下载
+      try {
+        var blob = new Blob([text], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click();
+        setTimeout(function(){
+          if (a.parentNode) a.parentNode.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 800);
+        toast('已导出文件');
+      } catch (e) {
+        toast('导出文件失败，请用「复制到剪贴板」');
+      }
+    }).catch(function(e){ toast('导出失败：' + e.message); });
+  }
+  function pickBackupFile(cb){
+    // 回调先挂上：两端原生侧都会调用 window.__pointsOnFilePicked(text)
+    window.__pointsOnFilePicked = function(text){
+      try { delete window.__pointsOnFilePicked; } catch (e) { window.__pointsOnFilePicked = null; }
+      if (text) cb(text);
+    };
+    // 1) iOS
+    try {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.PointsBridge){
+        window.webkit.messageHandlers.PointsBridge.postMessage({ action: 'pickFile' });
+        return;
+      }
+    } catch (e) {}
+    // 2) Android
+    try {
+      if (window.PointsBridge && typeof PointsBridge.pickFile === 'function'){
+        PointsBridge.pickFile();
+        return;
+      }
+    } catch (e) {}
+    // 3) 浏览器 <input type=file>
+    var inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json,text/plain';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', function(){
+      var f = inp.files && inp.files[0];
+      if (!f){ if (inp.parentNode) inp.parentNode.removeChild(inp); return; }
+      var fr = new FileReader();
+      fr.onload = function(){
+        if (inp.parentNode) inp.parentNode.removeChild(inp);
+        cb(String(fr.result || ''));
+      };
+      fr.onerror = function(){
+        if (inp.parentNode) inp.parentNode.removeChild(inp);
+        toast('读取文件失败');
+      };
+      fr.readAsText(f);
+    });
+    inp.click();
+  }
+
   /* ---------- 骨架屏 ---------- */
   function showSkeleton(){
     var frag = document.createDocumentFragment();
@@ -655,7 +856,12 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     // 多家单位不同（灵石 / 积分）时也不能相加，直接显示「—」，否则 100 灵石 +
     // 12.5 积分 会变成一个没有任何含义的 112.5。
     var mixed = (unit === '合计');
-    $('total').textContent = (!rows.length || !healthy || mixed) ? '—' : fmt(total);
+    var tn = $('total');
+    var showDash = (!rows.length || !healthy || mixed);
+    // 单位不同（积分 / 灵石）时不能相加，写「—」在 42px 下就是一根粗横条，
+    // 看着像分隔线。这里直接写「不合计」，用户一眼明白为什么没有总数。
+    tn.textContent = showDash ? (mixed ? '不合计' : '—') : fmt(total);
+    tn.className = 'num' + (showDash ? ' dash' : '');
     var tu = $('total-unit');
     if (tu) tu.textContent = mixed ? '' : (unit || '积分');
     renderChips(rows);
@@ -669,7 +875,6 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         '</div>';
       $('btnAll').disabled = true;
       $('btnAll').setAttribute('aria-disabled', 'true');
-      $('btnTasks').disabled = true;
       return;
     }
 
@@ -679,12 +884,6 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     list.textContent = '';
     list.appendChild(frag);
     $('btnAll').disabled = state.busy;
-    // 「领任务」只在存在支持任务体系的账号时可点
-    var hasTaskAcct = false;
-    for (var m = 0; m < rows.length; m++){
-      if (rows[m].has_tasks && !rows[m].error){ hasTaskAcct = true; break; }
-    }
-    $('btnTasks').disabled = state.busy || !hasTaskAcct;
   }
 
   /* ---------- 数据 ---------- */
@@ -747,53 +946,75 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       .catch(function(e){ toast('签到失败：' + e.message); if (btn) btn.disabled = false; });
   }
 
+  // 一键做完所有事：签到 → 领 AiPy 任务奖励 → 百度搭子抽奖。
+  // 用户的原话是「点一下全部签完并领掉，省一个按钮」——所以这三步串成一个动作，
+  // 只给用户看一条合并后的结果。
   function checkinAll(){
     if (state.busy) return;
     state.busy = true;
-    var b = $('btnAll'); b.disabled = true; b.textContent = '签到中…';
+    var b = $('btnAll'); b.disabled = true;
+    var origHTML = b.innerHTML;
+    b.textContent = '签到中…';
+    var stat = { ok: 0, skip: 0, bad: 0, taskClaimed: 0, taskGain: 0, taskUnit: '',
+                 drawn: 0, drawGain: 0, drawPrizes: [], drawUnit: '' };
+
     j('/api/checkin', { method: 'POST' })
       .then(function(res){
         var arr = Array.isArray(res) ? res : [res];
-        var ok = 0, skip = 0, bad = 0;
         for (var i = 0; i < arr.length; i++){
-          if (arr[i].error) bad++; else if (arr[i].already) skip++; else ok++;
+          if (arr[i].error) stat.bad++;
+          else if (arr[i].already) stat.skip++;
+          else stat.ok++;
         }
-        toast('完成：新签 ' + ok + '，已签 ' + skip + (bad ? '，失败 ' + bad : ''));
+        // 签完立刻领 AiPy 任务奖励（签到会解锁部分任务）
+        b.textContent = '领奖励…';
+        return post('/api/tasks/claim_all', {});
+      })
+      .then(function(res){
+        var rows = (res && res.results) || [];
+        for (var i = 0; i < rows.length; i++){
+          stat.taskClaimed += rows[i].claimed || 0;
+          stat.taskGain += rows[i].gain || 0;
+          if (rows[i].unit) stat.taskUnit = rows[i].unit;
+        }
+        // 再抽百度搭子的奖（每次签到送一次机会）
+        b.textContent = '抽奖中…';
+        return post('/api/lottery/draw_all', {});
+      })
+      .then(function(res){
+        var rows = (res && res.results) || [];
+        for (var i = 0; i < rows.length; i++){
+          stat.drawn += rows[i].drawn || 0;
+          stat.drawGain += rows[i].gain || 0;
+          if (rows[i].unit) stat.drawUnit = rows[i].unit;
+          var pz = rows[i].prizes || [];
+          for (var k = 0; k < pz.length; k++){ if (pz[k]) stat.drawPrizes.push(pz[k]); }
+        }
+        toast(summaryOf(stat));
         return load(true);
       })
       .catch(function(e){ toast('签到失败：' + e.message); })
       .then(function(){
         state.busy = false;
-        b.disabled = false; b.innerHTML = ICON('checkAll') + '一键签到';
+        b.disabled = false; b.innerHTML = origHTML;
       });
   }
 
-  function claimAllTasks(){
-    if (state.busy) return;
-    state.busy = true;
-    var b = $('btnTasks'); b.disabled = true; b.textContent = '领取中…';
-    j('/api/tasks/claim_all', { method: 'POST' })
-      .then(function(res){
-        var rows = (res && res.results) || [];
-        var claimed = 0, gain = 0, unit = '', bad = 0;
-        for (var i = 0; i < rows.length; i++){
-          claimed += rows[i].claimed || 0;
-          gain += rows[i].gain || 0;
-          if (rows[i].unit) unit = rows[i].unit;
-          if (rows[i].error) bad++;
-        }
-        var msg = claimed > 0
-          ? '已领 ' + claimed + ' 个任务' + (gain > 0 ? '，+' + fmt(gain) + ' ' + (unit || '') : '')
-          : '没有可领取的任务';
-        if (bad) msg += '，' + bad + ' 个账号有失败';
-        toast(msg);
-        return load(true);
-      })
-      .catch(function(e){ toast('领取失败：' + e.message); })
-      .then(function(){
-        state.busy = false;
-        b.disabled = false; b.innerHTML = ICON('task') + '领任务';
-      });
+  // 把三步结果压成一句话：信息密度高，但不能长到被截断。
+  function summaryOf(s){
+    var parts = ['新签 ' + s.ok];
+    if (s.skip) parts.push('已签 ' + s.skip);
+    if (s.bad) parts.push('失败 ' + s.bad);
+    var head = parts.join('，');
+    var extra = [];
+    if (s.taskClaimed > 0){
+      extra.push('任务 ' + s.taskClaimed + ' 个' + (s.taskGain > 0 ? ' +' + fmt(s.taskGain) + (s.taskUnit ? s.taskUnit : '') : ''));
+    }
+    if (s.drawn > 0){
+      extra.push('抽奖 ' + s.drawn + ' 次' + (s.drawGain > 0 ? ' +' + fmt(s.drawGain) + (s.drawUnit || '') : ''));
+    }
+    if (!extra.length) return head;
+    return head + '｜' + extra.join('，');
   }
 
   /* ---------- 下拉刷新 ---------- */
@@ -842,7 +1063,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     setTimeout(function(){ b.classList.remove('spin'); }, 1200);
   });
   $('btnAll').addEventListener('click', checkinAll);
-  $('btnTasks').addEventListener('click', claimAllTasks);
+  $('btnTheme').addEventListener('click', cycleTheme);
   $('btnAdd').addEventListener('click', openAddSheet);
   $('btnSettings').addEventListener('click', openSettings);
 
@@ -1004,7 +1225,21 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
   /* ---------- 设置：账号管理 / 备份 / 版本 ---------- */
   function openSettings(){
-    openSheet('设置', '账号管理、备份导出与导入。', function(body, close){
+    openSheet('设置', '账号管理、外观、备份导出与导入。', function(body, close){
+      body.appendChild(el('div', 'sect-h', '外观'));
+      var themeRow = el('div', 'seg');
+      ['system', 'light', 'dark'].forEach(function(t){
+        var seg = el('button', 'seg-item' + (readTheme() === t ? ' on' : ''), THEME_LABEL[t]);
+        seg.addEventListener('click', function(){
+          setTheme(t);
+          var all = themeRow.querySelectorAll('.seg-item');
+          for (var i = 0; i < all.length; i++) all[i].classList.remove('on');
+          seg.classList.add('on');
+        });
+        themeRow.appendChild(seg);
+      });
+      body.appendChild(themeRow);
+
       body.appendChild(el('div', 'sect-h', '账号管理'));
       var accBox = el('div', '');
       body.appendChild(accBox);
@@ -1085,14 +1320,22 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       body.appendChild(fExp.wrap);
       var expBtns = el('div', 'row-btns');
       var btnExp = el('button', 'btn ghost', '生成备份');
-      var btnCopy = el('button', 'btn ghost', '复制');
-      expBtns.appendChild(btnExp); expBtns.appendChild(btnCopy);
+      var btnFile = el('button', 'btn ghost', '存成文件');
+      expBtns.appendChild(btnExp); expBtns.appendChild(btnFile);
       body.appendChild(expBtns);
+      var btnCopy = el('button', 'btn ghost', '复制到剪贴板');
+      btnCopy.style.width = '100%';
+      body.appendChild(btnCopy);
+      var lastBackup = null;
       btnExp.addEventListener('click', function(){
         j('/api/export').then(function(d){
+          lastBackup = d;
           fExp.input.value = JSON.stringify(d, null, 2);
-          toast('备份已生成');
+          toast('备份已生成（' + (d.accounts || []).length + ' 个账号）');
         }).catch(function(e){ toast('导出失败：' + e.message); });
+      });
+      btnFile.addEventListener('click', function(){
+        saveBackupFile();
       });
       btnCopy.addEventListener('click', function(){ copyText(fExp.input); });
 
@@ -1102,11 +1345,24 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       });
       fImp.input.className = 'mono';
       body.appendChild(fImp.wrap);
+
+      // 从文件导入：手机上有备份文件时不用再长按复制粘贴一大段 JSON
+      var btnPick = el('button', 'btn ghost', '选择备份文件');
+      btnPick.style.width = '100%';
+      btnPick.addEventListener('click', function(){
+        pickBackupFile(function(text){
+          fImp.input.value = text;
+          toast('已读取文件，点「导入备份」应用');
+        });
+      });
+      body.appendChild(btnPick);
+
       var btnImp = el('button', 'btn filled', '导入备份');
       btnImp.style.width = '100%';
+      btnImp.style.marginTop = '10px';
       btnImp.addEventListener('click', function(){
         var txt = fImp.input.value.trim();
-        if (!txt){ toast('先粘贴备份内容'); return; }
+        if (!txt){ toast('先粘贴备份内容或选择备份文件'); return; }
         btnImp.disabled = true;
         post('/api/import', { text: txt }).then(function(r){
           btnImp.disabled = false;
@@ -1363,6 +1619,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   }
 
   /* ---------- 启动 ---------- */
+  // 主题要在首屏渲染前就定好，否则暗色用户会先看到一帧白底再翻黑。
+  applyTheme(readTheme());
   showSkeleton();
   load(true);
   // reload 续跑：iOS 后台回前台时网络进程被回收，fetch 持续失败 → autoCheckin
@@ -1410,7 +1668,13 @@ function ICON(name){
          '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
     refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
     task:'<rect x="4" y="3.5" width="15" height="15" rx="3"/><path d="M8.5 12l2.5 2.5 5-5.5"/>',
-    gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.2M12 19.3v2.2M21.5 12h-2.2M4.7 12H2.5M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6M18.7 18.7l-1.6-1.6M6.9 6.9L5.3 5.3"/>'
+    // 齿轮：外圈八齿 + 中心圆孔（与 icons.go 保持一致）。
+    // 不要用「小圆 + 放射短线」——那是太阳的画法，40px 下根本分不出来。
+    gear:'<path d="M12 2.6l1.9 1.1 2.2-.3 1.2 1.9 2 1 .2 2.2 1.5 1.6-1.5 1.6-.2 2.2-2 1-1.2 1.9-2.2-.3L12 21.4l-1.9-1.1-2.2.3-1.2-1.9-2-1-.2-2.2L3 12l1.5-1.6.2-2.2 2-1 1.2-1.9 2.2.3z"/><circle cx="12" cy="12" r="3.1"/>',
+    // 主题三态：太阳 = 浅色 / 月亮 = 深色 / 半圆 = 跟随系统
+    sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5M18.6 18.6l-1.5-1.5M6.9 6.9L5.4 5.4"/>',
+    moon:'<path d="M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8z"/>',
+    auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17" fill="currentColor" stroke="none"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
 }
@@ -1424,7 +1688,7 @@ var indexHTML = buildIndex()
 
 func buildIndex() string {
 	out := indexTmpl
-	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task"} {
+	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task", "sun", "moon", "auto"} {
 		out = strings.ReplaceAll(out, "{{ICON:"+name+"}}", iconSVG(name))
 	}
 	return out

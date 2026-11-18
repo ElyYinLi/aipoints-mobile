@@ -37,28 +37,37 @@ type credentialInput struct {
 	EnterpriseID string `json:"enterprise_id"`
 	TenantID     string `json:"tenant_id"`
 	Domain       string `json:"domain"`
+	// ExpiresAt 之前漏了：WorkBuddy 这类 token 型平台靠它判断要不要刷新，
+	// 丢掉会导致「备份导回来 token 立刻算过期」或「永不过期」两种错。
+	ExpiresAt string            `json:"expires_at,omitempty"`
+	Extra     map[string]string `json:"extra,omitempty"`
 }
 
-// 平台需要的身份头字段名（与 provider.Credential 保持一致）。
+// secret 序列化成 provider.Credential 的 JSON 形状。
+//
+// 用结构体 marshal 而不是手写 map：provider.Credential 以后加字段（比如新平台
+// 需要的私有参数）备份/恢复能自动跟上，不会像之前那样漏掉 expires_at。
 func (in credentialInput) secret() json.RawMessage {
-	m := map[string]string{
-		"cookie":        in.Cookie,
-		"access_token":  in.AccessToken,
-		"refresh_token": in.RefreshToken,
-		"uid":           in.UID,
-		"enterprise_id": in.EnterpriseID,
-		"tenant_id":     in.TenantID,
-		"domain":        in.Domain,
-		"label":         in.Label,
-		"account_id":    in.AccountID,
+	cred := provider.Credential{
+		AccountID:    in.AccountID,
+		Label:        in.Label,
+		Cookie:       in.Cookie,
+		AccessToken:  in.AccessToken,
+		RefreshToken: in.RefreshToken,
+		UID:          in.UID,
+		EnterpriseID: in.EnterpriseID,
+		TenantID:     in.TenantID,
+		Domain:       in.Domain,
+		Extra:        in.Extra,
 	}
-	// 去掉空字段，避免把一堆 "" 写进账号库
-	for k, v := range m {
-		if v == "" {
-			delete(m, k)
+	if ts := strings.TrimSpace(in.ExpiresAt); ts != "" {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			cred.ExpiresAt = t
+		} else if t, err := time.Parse("2006-01-02 15:04:05", ts); err == nil {
+			cred.ExpiresAt = t
 		}
 	}
-	b, _ := json.Marshal(m)
+	b, _ := json.Marshal(cred)
 	return b
 }
 

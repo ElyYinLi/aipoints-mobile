@@ -62,6 +62,8 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
 	mux.HandleFunc("/api/tasks/claim_all", s.handleTaskClaimAll)
+	// 抽奖：百度搭子签到后送抽奖机会，随「一键签到」一起抽掉
+	mux.HandleFunc("/api/lottery/draw_all", s.handleLotteryDrawAll)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。

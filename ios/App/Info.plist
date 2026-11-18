@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.1</string>
+	<string>0.4.2</string>
 	<key>CFBundleVersion</key>
-	<string>7</string>
+	<string>8</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -31,6 +31,10 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- 状态栏样式由代码按页面主题决定（浅色→深字，深色→白字），
+	     不写死成 UIStatusBarStyleLightContent，否则切主题后看不清楚 -->
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
