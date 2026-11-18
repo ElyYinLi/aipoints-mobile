@@ -30,11 +30,18 @@ mkdir -p "$APP"
 # ---------------------------------------------------------------- 1. Go 引擎
 echo "== 1/6 生成 Mobile.xcframework (ios/arm64) =="
 export PATH="$PATH:$(go env GOPATH)/bin"
+GP="$(go env GOPATH)"
 if [ ! -d "$XCF" ]; then
   command -v gomobile >/dev/null || go install golang.org/x/mobile/cmd/gomobile@latest
   command -v gobind   >/dev/null || go install golang.org/x/mobile/cmd/gobind@latest
   ( cd "$CORE" && go build ./... )
-  ( cd "$CORE" && gomobile bind \
+  # bind 必须在 GOPATH 模式下跑：module 模式下 gomobile 会要求 core/go.mod
+  # 里显式依赖 golang.org/x/mobile（`go get -tool`），而那个包要求 go>=1.26，
+  # 会把引擎的 go 指令一起抬高。GOPATH 下用软链把仓库挂进去即可隔离。
+  mkdir -p "$GP/src/github.com/ElyYinLi/aipoints-mobile"
+  ln -sfn "$CORE" "$GP/src/github.com/ElyYinLi/aipoints-mobile/core"
+  ( cd "$GP/src/github.com/ElyYinLi/aipoints-mobile/core" && \
+    GO111MODULE=off gomobile bind \
       -target=ios \
       -iosversion="$MIN_IOS" \
       -ldflags "-s -w" \
