@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  全透明系统栏主题。
+  直接引用 android:style/Theme.DeviceDefault.DayNight.* 不可靠：DayNight 变体在
+  部分 SDK 平台包里没有独立条目，aapt2 link 会报 resource not found。
+  这里继承不带 DayNight 的 DeviceDefault.NoActionBar，再显式把状态栏/导航栏
+  设成透明，明暗切换完全交给 WebView 里的 CSS 处理（页面自己铺满全屏）。
+-->
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>

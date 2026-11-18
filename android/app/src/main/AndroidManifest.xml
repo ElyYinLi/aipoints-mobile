@@ -20,8 +20,8 @@
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight.NoActionBar">
-        <!-- DayNight：跟随系统明暗，WebView 铺满全屏后系统栏不会有固定的白条 -->
+        android:theme="@style/AppTheme">
+        <!-- 系统栏透明：让 WebView 铺满全屏，深色模式下不会露出白色状态栏 -->
 
         <activity
             android:name=".MainActivity"
