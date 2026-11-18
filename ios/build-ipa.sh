@@ -94,10 +94,26 @@ JSON
     --minimum-deployment-target "$MIN_IOS" --app-icon AppIcon \
     --output-partial-info-plist "$OUT/assetcatalog.plist" >/dev/null 2>&1 \
     || echo "  (actool 未产出 Assets.car，回退平铺图标)"
-  # 平铺图标兜底：老式 CFBundleIconFiles 也能被 SpringBoard 识别
+  # 平铺图标兜底：只生成 Assets.car 时，iOS 15 的部分安装方式（尤其自签重签）
+  # 拿不到图标，会显示白底占位。这里同时铺一组 AppIcon<尺寸>.png 并在
+  # Info.plist 里登记 CFBundleIconFiles，两条路都留着。
   for s in 60 120 180 1024; do
     sips -z $s $s "$ASSETS/AppIcon.appiconset/icon-1024.png" \
       --out "$APP/AppIcon${s}.png" >/dev/null 2>&1 || true
+  done
+  PB=/usr/libexec/PlistBuddy
+  $PB -c "Delete :CFBundleIconFiles" "$APP/Info.plist" >/dev/null 2>&1 || true
+  $PB -c "Add :CFBundleIconFiles array" "$APP/Info.plist" >/dev/null 2>&1 || true
+  for f in AppIcon60.png AppIcon120.png AppIcon180.png; do
+    $PB -c "Add :CFBundleIconFiles: string ${f%.png}" "$APP/Info.plist" >/dev/null 2>&1 || true
+  done
+  # iPad 兼容（UIDeviceFamily 含 2），缺了会在 iPad 上白图标
+  $PB -c "Delete :CFBundleIcons" "$APP/Info.plist" >/dev/null 2>&1 || true
+  $PB -c "Add :CFBundleIcons dict" "$APP/Info.plist" >/dev/null 2>&1 || true
+  $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon dict" "$APP/Info.plist" >/dev/null 2>&1 || true
+  $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array" "$APP/Info.plist" >/dev/null 2>&1 || true
+  for f in AppIcon60 AppIcon120 AppIcon180; do
+    $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles: string $f" "$APP/Info.plist" >/dev/null 2>&1 || true
   done
 else
   echo "  跳过：缺少 assets/app-icon-512.png"
