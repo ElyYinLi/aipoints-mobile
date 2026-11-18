@@ -56,7 +56,7 @@ func TestProvidersMarkTaskSupport(t *testing.T) {
 }
 
 // TestQueryBackfillsLabel 查询结果要带回账号备注。
-func TestQueryBackfillsLabel(t *testing.T) {	// 假上游：aipy 返回正常快照
+func TestQueryBackfillsLabel(t *testing.T) { // 假上游：aipy 返回正常快照
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/checkin/status") {
 			w.Write([]byte(`{"success":true,"data":{"checked_in_today":true}}`))
