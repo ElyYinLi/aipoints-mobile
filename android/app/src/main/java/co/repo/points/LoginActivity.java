@@ -142,7 +142,7 @@ public final class LoginActivity extends Activity {
             Toast.makeText(this, "没读到登录信息，请确认已登录后再点「完成」", Toast.LENGTH_LONG).show();
             return;
         }
-        if (ck != null && ck.contains("=")) {
+        if (!oauth && ck != null && ck.contains("=")) {
             CookieJar.remember(this, provider, url, ck);
         }
         setResult(RESULT_OK, new Intent());

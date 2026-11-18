@@ -168,6 +168,9 @@ public final class MainActivity extends Activity {
             // 已自行清掉快照，这里绝不能无条件 commit（会凭空多出一个账号）。
             if (res == RESULT_OK) {
                 Engine.commitPendingLogins(this);
+            } else {
+                // 取消：清掉 OAuth 待办标记，避免 reload 后白白轮询 60 秒
+                web.evaluateJavascript("try{localStorage.removeItem('oauth_pending')}catch(e){}", null);
             }
             web.reload();
         }

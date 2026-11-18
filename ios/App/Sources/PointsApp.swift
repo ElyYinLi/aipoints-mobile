@@ -59,7 +59,17 @@ struct ContentView: View {
         )) { target in
             LoginSheet(provider: target.provider) { cookies in
                 login.dismiss()
-                if let cookies { engine.addAccount(provider: target.provider, cookie: cookies, label: target.provider) }
+                // WorkBuddy 是 OAuth：凭据是引擎换回来的 access token，
+                // cookie 不代表登录态，绝不能拿它建一条「只有 cookie」的废账号。
+                // 注意：空串表示「完成但没 cookie」，nil 才是「取消」。
+                if target.provider != "workbuddy", let cookies, !cookies.isEmpty {
+                    engine.addAccount(provider: target.provider, cookie: cookies, label: target.provider)
+                }
+                if cookies == nil {
+                    // 取消：清掉待办标记，避免 reload 后白白轮询 60 秒
+                    webView?.evaluateJavaScript(
+                        "try{localStorage.removeItem('oauth_pending')}catch(e){}", completionHandler: nil)
+                }
                 webView?.reload()
             }
         }

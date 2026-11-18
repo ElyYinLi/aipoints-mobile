@@ -77,8 +77,10 @@ struct LoginView: UIViewControllerRepresentable {
                 // WorkBuddy 走官方 OAuth：token 由引擎轮询换取，与 cookie 无关。
                 // 它的授权页可能一个会话 cookie 都不留，此时也必须放行，
                 // 否则用户永远卡在「没读到登录信息」。
+                // 传空串而不是 nil：「完成但没 cookie」和「取消」必须区分开，
+                // 否则上层会把完成误当成取消，把 OAuth 待办标记清掉。
                 if self.parent.provider == "workbuddy" {
-                    self.finish(cookies)
+                    self.finish(cookies ?? "")
                     return
                 }
                 guard let cookies, !cookies.isEmpty else {

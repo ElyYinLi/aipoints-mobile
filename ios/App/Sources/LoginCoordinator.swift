@@ -33,6 +33,8 @@ final class LoginCoordinator: ObservableObject {
         "dumate": "baidu.com",
         "aipy":   "trustoken.cn",
         "lingxi": "kdocs.cn",
+        // WorkBuddy 授权页在 workbuddy.cn，取 cookie 时按父域过滤才拿得全
+        "workbuddy": "workbuddy.cn",
     ]
 
     func cookieHost(for provider: String) -> String? {
