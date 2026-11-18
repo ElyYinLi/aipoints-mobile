@@ -99,3 +99,17 @@ jobs:
           # 自签 IPA 下载即用，不需要长期占存储额度
           retention-days: 7
           if-no-files-found: error
+
+      # Actions 产物要登录才能下载，而仓库是公开的：把 IPA 也挂到 Release 上，
+      # 手机浏览器直接点链接就能拿到，不用登 GitHub。
+      - name: 发布到 Release（公开直链）
+        # 只在手动触发时发：push 触发的构建不覆盖用户正在用的发布版
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.make_ipa }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="ios-latest"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "iOS 自签包" \
+              --notes "自签 IPA，需用 SideStore / AltStore / Sideloadly 重签后安装。" --latest
+          gh release upload "$TAG" ios/build/Points.ipa --clobber
