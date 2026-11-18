@@ -16,12 +16,29 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
 )
 
-const traeBase = "https://api.trae.cn"
+const (
+	traeBase       = "https://api.trae.cn"
+	traeAppVersion = "0.1.51"
+	traeUA         = "VSCode 1.107.1 (TRAE SOLO CN)"
+)
+
+// Trae 业务码（来自第三方实现与桌面端实测）：
+//
+//	0          成功
+//	9004/9095  今日已签
+//	9074       参与人数过多排队限流，属正常，不应报错
+//	1001/1002  token 失效，需要重新登录
+const (
+	traeCodeOK      = 0
+	traeCodeRate    = 9074
+	traeCodeAuthErr = 1001
+)
 
 // Trae 实现 Provider。
 type Trae struct {
@@ -57,15 +74,17 @@ func (t *Trae) headers(c Credential) map[string]string {
 	h := map[string]string{
 		"Authorization":      "Cloud-IDE-JWT " + c.AccessToken,
 		"Content-Type":       "application/json",
-		"User-Agent":         "VSCode 1.107.1 (TRAE SOLO CN)",
+		"User-Agent":         traeUA,
 		"X-User-Region":      "CN",
 		"Package-Type":       "stable_cn",
 		"X-Lscbd-Aid":        "787976",
 		"X-Lscbd-Platform":   "windows",
-		"App-Version":        "0.1.51",
+		"App-Version":        traeAppVersion,
 		"Accept":             "*/*",
+		"X-Request-Id":       randHex(16),
 		"X-Device-Brand":     "To be filled by O.E.M.",
 		"X-Device-Type":      "windows",
+		"X-Os-Version":       "10.0.19045",
 		"X-Lgw-Req-Sdk-Type": "3",
 	}
 	if c.Extra != nil {
@@ -85,33 +104,54 @@ func (t *Trae) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	}
 	resp, err := t.post(ctx, c, "/trae/api/v2/ug/checkin_credits/status")
 	if err != nil {
-		snap.Error = err.Error()
+		snap.Error = "网络错误: " + err.Error()
+		return snap, nil
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		snap.Error = fmt.Sprintf("登录已失效(%d)，请重新登录 Trae", resp.Status)
 		return snap, nil
 	}
 	m, err := resp.JSON()
 	if err != nil {
-		snap.Error = err.Error()
+		snap.Error = "响应解析失败: " + err.Error()
 		return snap, nil
 	}
+	// 业务码优先于 HTTP 状态：200 里也可能带错误码
+	if code := numOf(m["code"]); code == traeCodeAuthErr || code == 1002 {
+		snap.Error = "登录已失效，请重新登录 Trae"
+		return snap, nil
+	}
+	if code := numOf(m["code"]); code != traeCodeOK && code != 0 {
+		snap.Error = fmt.Sprintf("Trae 返回错误码 %s：%s", fmtNum(code), strOf(pick(m, "message", "msg")))
+		return snap, nil
+	}
+
 	data := digMap(m, "data")
 	src := m
 	if data != nil {
 		src = data
 	}
-
 	snap.CheckedIn = boolOf(pick(src, "checked_in", "checkedIn"))
-	credits := numOf(pick(src, "credits", "credit")) + numOf(pick(src, "extra_credits", "extraCredits"))
-	snap.Balance = credits
-	snap.BalanceText = fmtNum(credits) + " 积分"
+	// credits 与 extra_credits 是「本次可领」与「额外赠送」两种口径，相加会把奖励算大
+	credits := numOf(pick(src, "credits", "credit"))
+	if credits == 0 {
+		credits = numOf(pick(src, "extra_credits", "extraCredits"))
+	}
+	// 仅在拿到可信额度时才写余额，否则会让「合计」凭空多出一个 0
+	if credits > 0 {
+		snap.Balance = credits
+		snap.BalanceText = fmtNum(credits) + " 积分"
+	}
 	if snap.CheckedIn {
 		snap.Detail = "今天已签到"
 	} else {
 		snap.Detail = "今天还没签"
 	}
+	snap.OK = true
 	return snap, nil
 }
 
-// Checkin 执行签到。已签时返回 Already，不算失败。
+// Checkin 执行签到。已签、限流都算「不需要用户处理」，不算失败。
 func (t *Trae) Checkin(ctx context.Context, c Credential) (Result, error) {
 	res := Result{Provider: "trae", AccountID: c.AccountID}
 	if c.AccessToken == "" {
@@ -125,20 +165,48 @@ func (t *Trae) Checkin(ctx context.Context, c Credential) (Result, error) {
 	}
 	resp, err := t.post(ctx, c, "/trae/api/v2/ug/checkin_credits/claim")
 	if err != nil {
-		res.Error = err.Error()
+		res.Error = "网络错误: " + err.Error()
 		return res, nil
 	}
-	if _, err := resp.JSON(); err != nil {
-		res.Error = err.Error()
+	if resp.Status == 401 || resp.Status == 403 {
+		res.Error = fmt.Sprintf("登录已失效(%d)，请重新登录 Trae", resp.Status)
 		return res, nil
 	}
-	res.OK, res.Message = true, "签到成功"
-	if snap, _ := t.Query(ctx, c); snap.Balance > 0 {
-		res.Gain = snap.Balance
+	m, err := resp.JSON()
+	if err != nil {
+		res.Error = "响应解析失败: " + err.Error()
+		return res, nil
+	}
+	code := numOf(m["code"])
+	switch {
+	case code == traeCodeOK:
+		res.OK, res.Message = true, "签到成功"
+	case code == 9004 || code == 9095:
+		res.OK, res.Already, res.Message = true, true, "今天已签到"
+	case code == traeCodeRate:
+		// 排队限流是常态，短时间狂重试会延长惩罚，交给下一次打开 App
+		res.Message = "签到人数较多，稍后再试"
+		res.Error = ""
+		res.OK = false
+	case code == traeCodeAuthErr || code == 1002:
+		res.Error = "登录已失效，请重新登录 Trae"
+	default:
+		res.Error = fmt.Sprintf("Trae 返回错误码 %s：%s", fmtNum(code), strOf(pick(m, "message", "msg")))
+	}
+	if res.OK {
+		if data := digMap(m, "data"); data != nil {
+			if v := numOf(pick(data, "points", "credits")); v > 0 {
+				res.Gain = v
+			}
+		}
 	}
 	return res, nil
 }
 
+// traeBody 是签到接口要求的请求体。
+// 桌面端固定发 {"req_source":1}；发空对象会被服务端判为非法请求直接拒（表现为 9074）。
+func traeBody() map[string]any { return map[string]any{"req_source": 1} }
+
 func (t *Trae) post(ctx context.Context, c Credential, path string) (*httpx.Response, error) {
-	return t.c.DoJSON(ctx, "POST", t.base(c)+path, t.headers(c), map[string]any{})
+	return t.c.DoJSON(ctx, "POST", t.base(c)+path, t.headers(c), traeBody())
 }

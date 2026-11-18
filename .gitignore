@@ -11,6 +11,10 @@ data/
 secrets/
 *.jks
 *.keystore
+# 例外：Android 自签名密钥必须随仓库走，否则每次构建签名不同，
+# 用户覆盖安装会失败（只能卸载，账号与登录态全丢）。
+# 这是自用自签场景，泄露只意味着「别人能伪造升级包」，不涉及账号安全。
+!android/signing/points.jks
 *.mobileprovision
 *.p12
 

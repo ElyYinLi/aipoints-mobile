@@ -34,6 +34,24 @@ final class Engine: ObservableObject {
         let reply = MobileStart(dir.path) ?? ""
         ready = reply.contains("\"ok\":true")
         status = ready ? "" : "引擎启动失败：\(reply)"
+        if ready { restoreAccounts() }
+    }
+
+    /// 把 Keychain 里的凭据重新灌回引擎。
+    ///
+    /// 为什么必须先做这一步：引擎的账号库在 app 沙箱的 engine 目录里，
+    /// 重装/系统清理 WebView 数据后可能丢，而真正敏感的部分（cookie）在 Keychain。
+    /// 少了这一步，表面上账号还在，一签到就报「缺少 cookie」。
+    /// 幂等：已存在同 account_id 的记录会被覆盖为同一份明文。
+    private func restoreAccounts() {
+        let raw = MobileListAccounts() ?? "[]"
+        guard let data = raw.data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        for item in list {
+            guard let id = item["account_id"] as? String else { continue }
+            guard let secret = Keychain.load(key: "secret:" + id) else { continue }
+            _ = MobileAddAccount(secret)
+        }
     }
 
     // MARK: - 账号与查询

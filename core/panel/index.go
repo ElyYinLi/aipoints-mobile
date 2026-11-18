@@ -262,7 +262,11 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   background:var(--on-surface);color:var(--surface);
   padding:12px 20px;border-radius:var(--r-md);font-size:13.5px;font-weight:540;
   box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;z-index:40;
-  transition:transform .26s cubic-bezier(.2,.8,.2,1),opacity .26s;max-width:86vw;text-align:center;
+  transition:transform .26s cubic-bezier(.2,.8,.2,1),opacity .26s;
+  /* pill 形态：不换行、宽度随内容、超长才省略。之前固定 86vw 会让
+     「完成：新签 1，已签 0，失败 4」折成两行，视觉上像一块压在卡片上的补丁。 */
+  width:max-content;max-width:min(88vw,520px);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;
 }
 .snack.on{transform:translate(-50%,0);opacity:1}
 
@@ -436,8 +440,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         if (unit && unit !== u) unit = '合计'; else unit = u;
       }
     }
-    // 全异常时显示「—」而不是 0：0 会被误读成「余额为零」
-    $('total').textContent = (rows.length && !healthy) ? '—' : fmt(total);
+    // 全异常或没有账号时显示「—」而不是 0：0 会被误读成「余额为零」
+    $('total').textContent = (!rows.length || !healthy) ? '—' : fmt(total);
     var tu = $('total-unit');
     if (tu) tu.textContent = (unit === '合计') ? '' : (unit || '积分');
     renderChips(rows);
@@ -671,16 +675,29 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     } catch (e) {}
     // 3) 兜底：自定义 scheme，两端 WebViewClient / navigationDelegate 都会拦
     location.href = 'points://login?provider=' + encodeURIComponent(providerId);
+
+    // 壳层未必会 reload（例如 iOS 只 dismiss 了登录页）。登录回到前台时若
+    // 既不 reload 也不发信号，页面就永远看不到新账号——这是「加完账号没反应」的根因。
+    // 这里记一个时间戳，配合 pageshow / visibilitychange 做兜底重查。
+    loginPendingAt = Date.now();
   }
 
   /* ---------- 对外暴露给壳层：打开即签到 ---------- */
-  // Android 在 onResume / iOS 在 viewDidAppear 调用一次。
-  // 行为：先刷新余额，只对「未签且无错误」的账号发起签到。
   // 自动签到：壳层在「每次打开 App / 回到前台」调用一次。
   // 只对未签账号发起签到，已签的完全不发请求（省流量、降低风控概率）。
   // 幂等：并发调用直接返回同一个 Promise，避免 Android onResume 与页面
   // visibilitychange 同时触发时发两轮请求（重复签到会被平台判为异常）。
   var autoTask = null;
+  var loginPendingAt = 0;
+
+  // resumeAfterLogin：登录容器关闭后回到前台时调用。
+  // 只要距上次发起登录不到 10 分钟，就重新拉一次数据（新增账号会立刻出现）。
+  function resumeAfterLogin(){
+    if (!loginPendingAt) return;
+    if (Date.now() - loginPendingAt > 10 * 60 * 1000) { loginPendingAt = 0; return; }
+    loginPendingAt = 0;
+    load(true).then(function(){ toast('已同步账号'); });
+  }
   function autoCheckin(){
     if (autoTask) return autoTask;
     autoTask = load(true).then(function(){
@@ -708,7 +725,13 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   load(true);
   // 页面从后台回到前台时自动刷新 + 自动签到（用户「打开软件即签到」的核心诉求）
   document.addEventListener('visibilitychange', function(){
-    if (document.visibilityState === 'visible') autoCheckin();
+    if (document.visibilityState !== 'visible') return;
+    resumeAfterLogin();
+    autoCheckin();
+  });
+  // bfcache 恢复（iOS 从登录页返回常见）：pageshow 的 persisted=true 时脚本不会重跑
+  window.addEventListener('pageshow', function(e){
+    if (e.persisted) { resumeAfterLogin(); autoCheckin(); }
   });
 })();
 

@@ -67,24 +67,37 @@ struct LoginTarget: Identifiable {
 struct LoginSheet: View {
     let provider: String
     var onDone: (String?) -> Void
-    @State private var coordinator: LoginView.Coordinator?
+    /// 重新挂载 LoginView 用：点「完成」时强制提取一次
+    @State private var extractTick = 0
+    @State private var forcedExtract = false
 
     var body: some View {
         NavigationView {
             Group {
                 if let url = LoginCoordinator.shared.url(for: provider) {
-                    LoginView(provider: provider, url: url) { cookies in
+                    LoginView(provider: provider, url: url,
+                              forceExtract: forcedExtract,
+                              extractTick: extractTick) { cookies in
                         onDone(cookies)
                     }
+                    .id(extractTick)
                 } else {
                     Text("未配置登录入口")
                 }
             }
-            .navigationTitle("登录 \(provider)")
+            .navigationTitle("已登录？点完成")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { onDone(nil) }
+                }
+                // 自动收尾有判定条件，个别平台（跳转多、域名特殊）可能识别不到，
+                // 给用户一个明确出口，否则只能取消重来。
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        forcedExtract = true
+                        extractTick += 1   // 重建 LoginView，用新参数触发强制提取
+                    }
                 }
             }
         }

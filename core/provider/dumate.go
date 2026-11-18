@@ -89,28 +89,31 @@ func (d *Dumate) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Error = "网络错误: " + err.Error()
 		return snap, nil
 	}
+	// 状态码先于 JSON 解析：401/403 的响应体不是 JSON，先解析会误报成解析失败
+	if resp.Status == 401 || resp.Status == 403 {
+		snap.Error = fmt.Sprintf("登录已失效(%d)，请重新登录百度搭子", resp.Status)
+		return snap, nil
+	}
 	m, err := resp.JSON()
 	if err != nil {
-		snap.Error = err.Error()
+		snap.Error = "响应解析失败: " + err.Error()
 		return snap, nil
 	}
-	if resp.Status == 401 || resp.Status == 403 {
-		snap.Error = "cookie 失效，需要重新登录"
-		return snap, nil
+	// 百度网关的响应可能包在 data / result 里，字段名也可能是几种写法，统一下钻。
+	snap.CheckedIn = boolOf(digAny(m, "signed_today", "claimed", "today_signed", "is_signed", "login_bonus_claimed", "received"))
+	if v, ok := httpx.Num(digAny(m, "gain", "points", "reward", "bonus")); ok && v > 0 {
+		snap.Detail = "今日可得 " + fmtNum(v)
 	}
-	data, _ := m["data"].(map[string]any)
-	if data == nil {
-		data = m
-	}
-	// 字段名推断：signed_today / claimed / today_signed 皆为常见命名，命中即用
-	snap.CheckedIn = httpx.Bool(firstOf(data, "signed_today", "claimed", "today_signed", "is_signed"))
-	if v, ok := httpx.Num(firstOf(data, "gain", "points", "reward")); ok {
-		snap.Detail = fmt.Sprintf("今日可得 %v", v)
+	// 状态接口本身可能就带积分总额，先填上；额度总览接口拿到更准确的值再覆盖
+	if v, ok := httpx.Num(digAny(m, "total_points", "points_total", "total")); ok {
+		snap.Balance = v
+		snap.BalanceText = fmtNum(v)
 	}
 	if total, used, ok := d.quota(ctx, c); ok {
 		snap.Balance = total - used
-		snap.BalanceText = fmt.Sprintf("%.2f 积分", total-used)
+		snap.BalanceText = fmtNum(snap.Balance)
 	}
+	snap.Unit = "积分"
 	snap.OK = true
 	return snap, nil
 }
@@ -125,12 +128,8 @@ func (d *Dumate) quota(ctx context.Context, c Credential) (float64, float64, boo
 	if err != nil {
 		return 0, 0, false
 	}
-	data, _ := m["data"].(map[string]any)
-	if data == nil {
-		data = m
-	}
-	total, ok1 := httpx.Num(firstOf(data, "total_points", "total", "quota_total"))
-	used, ok2 := httpx.Num(firstOf(data, "used_points", "used", "quota_used"))
+	total, ok1 := httpx.Num(digAny(m, "total_points", "total", "quota_total"))
+	used, ok2 := httpx.Num(digAny(m, "used_points", "used", "quota_used"))
 	if !ok1 {
 		return 0, 0, false
 	}
@@ -158,17 +157,26 @@ func (d *Dumate) Checkin(ctx context.Context, c Credential) (Result, error) {
 	h["x-bce-request-id"] = randHex(16)
 	resp, err := d.c.DoJSON(ctx, "POST", d.base(c)+"/api/dumate/points/loginBonus", h, map[string]any{})
 	if err != nil {
-		res.Error = "网络错误: " + err.Error()
+		res.Error = "网络不通，稍后重试"
+		return res, nil
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		res.Error = fmt.Sprintf("登录已失效(%d)，请重新登录百度搭子", resp.Status)
 		return res, nil
 	}
 	m, err := resp.JSON()
 	if err != nil {
-		res.Error = err.Error()
+		res.Error = "响应解析失败: " + err.Error()
 		return res, nil
 	}
+	msgD := strOf(pick(m, "msg", "message"))
 	if code, ok := httpx.Num(m["code"]); ok && code != 0 {
-		// 百度系业务码 0 表示成功
-		res.Error = fmt.Sprintf("业务码 %v: %s", code, httpx.Str(m["msg"]))
+		// 百度系业务码 0 表示成功。已经领过常以业务码报错形式返回，按已签处理。
+		if strings.Contains(msgD, "已领") || strings.Contains(msgD, "已签") || strings.Contains(msgD, "重复") {
+			res.OK, res.Already, res.Message = true, true, msgD
+			return res, nil
+		}
+		res.Error = fmt.Sprintf("业务码 %s: %s", fmtNum(code), msgD)
 		return res, nil
 	}
 	res.OK = true

@@ -255,9 +255,22 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 			res.Provider = a.Provider
 		}
 		out = append(out, res)
-		time.Sleep(1200 * time.Millisecond)
+		// 只有真的发过写请求才需要间隔（防同设备批量写触发风控）。
+		// 登录失效 / 网络不通这类账号根本没写入，白等一秒多只会让「一键签到」显得卡。
+		if wroteRemote(res) {
+			time.Sleep(1200 * time.Millisecond)
+		}
 	}
 	writeJSON(w, out)
+}
+
+// wroteRemote 判断本次签到是否真的打到了上游的写接口。
+// 已签 / 登录失效 / 缺凭据都属于「没写」，不需要节流。
+func wroteRemote(r provider.Result) bool {
+	if r.Error != "" || r.Already {
+		return false
+	}
+	return r.OK
 }
 
 func decodeCred(a store.Account) (provider.Credential, error) {

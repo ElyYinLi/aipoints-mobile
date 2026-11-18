@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
@@ -14,14 +15,19 @@ import (
 // TestWorkBuddyQueryAndCheckin 用假服务器验证请求形状（方法/路径/身份头）与响应解析。
 // 价值：把接口契约固化下来，官方接口一变测试先红。
 func TestWorkBuddyQueryAndCheckin(t *testing.T) {
+	// 加锁：WorkBuddy 现在并发发起「状态」与「余额」两个请求，
+	// handler 会被多个 goroutine 同时进入，无锁写 map 会直接 panic。
+	var mu sync.Mutex
 	var seen = map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		seen["path"] = r.URL.Path
 		seen["method"] = r.Method
 		seen["auth"] = r.Header.Get("Authorization")
 		seen["uid"] = r.Header.Get("X-User-Id")
 		seen["origin"] = r.Header.Get("Origin")
 		seen["ua"] = r.Header.Get("User-Agent")
+		mu.Unlock()
 		switch r.URL.Path {
 		case "/v2/billing/meter/checkin-activity-status":
 			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{
@@ -208,6 +214,11 @@ func TestTraeFlow(t *testing.T) {
 		seenAuth = r.Header.Get("Authorization")
 		seenUA = r.Header.Get("User-Agent")
 		seenRegion = r.Header.Get("X-User-Region")
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["req_source"] == nil {
+			t.Errorf("请求体缺 req_source，服务端会拒成 9074")
+		}
 		switch r.URL.Path {
 		case "/trae/api/v2/ug/checkin_credits/status":
 			// 第一次查：没签；领过之后再查：已签
@@ -230,8 +241,10 @@ func TestTraeFlow(t *testing.T) {
 	if snap.CheckedIn {
 		t.Fatalf("初始状态应为未签到")
 	}
-	if snap.Balance != 350 {
-		t.Fatalf("积分应为 credits+extra_credits=350，实际 %v", snap.Balance)
+	// credits 与 extra_credits 是两种口径（本次可领 / 额外赠送），相加会把奖励算大，
+	// 这里取 credits 优先；对照 L0NE-6/Trae-AutoCheckin 的 reward_credits() 实现。
+	if snap.Balance != 300 {
+		t.Fatalf("积分应取 credits=300，实际 %v", snap.Balance)
 	}
 	if seenAuth != "Cloud-IDE-JWT jwt-xyz" {
 		t.Fatalf("Authorization 头格式错误: %q", seenAuth)

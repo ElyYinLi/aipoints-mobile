@@ -113,13 +113,14 @@ func (l *Lingxi) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Error = "网络错误: " + err.Error()
 		return snap, nil
 	}
-	m, err := resp.JSON()
-	if err != nil {
-		snap.Error = err.Error()
+	// 状态码先于 JSON 解析：401/403 的响应体不是 JSON
+	if resp.Status == 401 || resp.Status == 403 {
+		snap.Error = fmt.Sprintf("登录已失效(%d)，请重新登录灵犀", resp.Status)
 		return snap, nil
 	}
-	if resp.Status == 401 || resp.Status == 403 {
-		snap.Error = "cookie 失效，需要重新登录"
+	m, err := resp.JSON()
+	if err != nil {
+		snap.Error = "响应解析失败: " + err.Error()
 		return snap, nil
 	}
 	dt, found := pickDaily(m)
@@ -137,7 +138,8 @@ func (l *Lingxi) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	}
 	if bal, ok := l.queryBalance(ctx, c); ok {
 		snap.Balance = bal
-		snap.BalanceText = fmt.Sprintf("%.0f 智点", bal)
+		snap.BalanceText = fmtNum(bal)
+		snap.Unit = "智点"
 	}
 	snap.OK = true
 	return snap, nil
@@ -187,8 +189,14 @@ func (l *Lingxi) Checkin(ctx context.Context, c Credential) (Result, error) {
 		res.Error = err.Error()
 		return res, nil
 	}
+	msgL := strOf(pick(m, "msg", "message"))
 	if code, ok := httpx.Num(m["code"]); ok && code != 0 {
-		res.Error = fmt.Sprintf("业务码 %v: %s", code, httpx.Str(m["msg"]))
+		// 已经领过时上游以业务码报错形式返回，按已签处理，不报错
+		if strings.Contains(msgL, "已领") || strings.Contains(msgL, "已签") || strings.Contains(msgL, "重复") {
+			res.OK, res.Already, res.Message = true, true, msgL
+			return res, nil
+		}
+		res.Error = fmt.Sprintf("业务码 %s: %s", fmtNum(code), msgL)
 		return res, nil
 	}
 	res.OK = true

@@ -98,31 +98,53 @@ func (w *WorkBuddy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Error = "网络错误: " + err.Error()
 		return snap, nil
 	}
-	m, err := resp.JSON()
-	if err != nil {
-		snap.Error = err.Error()
+	if resp.Status >= 500 {
+		snap.Error = fmt.Sprintf("服务端异常(%d)，稍后重试", resp.Status)
 		return snap, nil
 	}
+	// 状态码判定必须早于 JSON 解析：401/403 的响应体常是 HTML 或空，
+	// 先解析会让真正的「登录失效」被误报成「响应解析失败」。
 	if resp.Status == 401 || resp.Status == 403 {
 		snap.Error = fmt.Sprintf("鉴权失败(%d)：token 过期或身份头不匹配", resp.Status)
 		return snap, nil // 余额 goroutine 自行结束，channel 缓冲 1，不会泄漏
 	}
-
-	// 字段路径为推断值（逆向只拿到接口形状，未见真实响应）：
-	// 优先取 data 层，取不到再退回顶层，任一命中即用。
-	data, _ := httpx.Pick(m, "data").(map[string]any)
-	if data == nil {
-		data = m
+	m, err := resp.JSON()
+	if err != nil {
+		snap.Error = "响应解析失败: " + err.Error()
+		return snap, nil
 	}
-	snap.CheckedIn = httpx.Bool(firstOf(data, "checked_in", "checkedIn", "today_checked", "has_checked_in"))
-	snap.Streak = int(numOr(firstOf(data, "streak", "continuous_days", "streak_days"), 0))
-	if v, ok := httpx.Num(firstOf(data, "total_credits", "credits", "total", "amount")); ok {
+
+	// 字段以第三方实测实现为准（Minatoxiaohu/agent-auto-signin、baokun-l/workbuddy-daily-checkin）：
+	//   today_checked_in  —— 今日是否已签
+	//   today_credit / daily_credit —— 今日可得
+	//   streak_days / total_credits —— 连续天数 / 累计积分
+	//   active=false 表示活动未开启，此时不能当成「未签到」去写请求
+	// 信封可能是裸对象，也可能包在 data/result/resp 里，用 digAny 统一下钻。
+	active, hasActive := digAny(m, "active").(bool)
+	if hasActive && !active {
+		snap.OK = true
+		snap.Detail = "签到活动未开启"
+		snap.BalanceText = ""
+		return snap, nil
+	}
+	snap.CheckedIn = boolOf(digAny(m, "today_checked_in", "checked_in", "checkedIn", "today_checked"))
+	snap.Streak = int(numOr(digAny(m, "streak_days", "continuous_days", "streak"), 0))
+	if v, ok := httpx.Num(digAny(m, "total_credits", "credits", "total", "amount")); ok {
 		snap.Balance = v
+		snap.BalanceText = fmtNum(v)
 	}
-	snap.BalanceText = httpx.Str(firstOf(data, "total_credits", "credits", "total"))
-	snap.Detail = "签到状态接口返回正常"
+	if snap.CheckedIn {
+		if v, ok := httpx.Num(digAny(m, "today_credit", "daily_credit")); ok && v > 0 {
+			snap.Detail = "今日已签 · +" + fmtNum(v)
+		} else {
+			snap.Detail = "今日已签到"
+		}
+	} else {
+		snap.Detail = "今日未签到"
+	}
 
-	// 余额口径（App 首屏），失败只降级不报错
+	// 余额口径（App 首屏），失败只降级不报错。
+	// 注意：状态接口已给出累计积分时，余额接口只做覆盖，不改变签到的结论。
 	if br := <-balCh; br.ok {
 		snap.Balance = br.v
 		snap.BalanceText = fmt.Sprintf("%.2f", br.v)
@@ -188,7 +210,11 @@ func (w *WorkBuddy) Checkin(ctx context.Context, c Credential) (Result, error) {
 	}
 	resp, err := w.c.DoJSON(ctx, "POST", w.base(c)+"/v2/billing/meter/daily-checkin", w.headers(c), map[string]any{})
 	if err != nil {
-		res.Error = "网络错误: " + err.Error()
+		res.Error = "网络不通，稍后重试"
+		return res, nil
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		res.Error = fmt.Sprintf("登录已失效(%d)，请重新登录 WorkBuddy", resp.Status)
 		return res, nil
 	}
 	m, err := resp.JSON()
@@ -198,10 +224,15 @@ func (w *WorkBuddy) Checkin(ctx context.Context, c Credential) (Result, error) {
 	}
 	code, _ := httpx.Num(m["code"])
 	msg := httpx.Str(m["msg"])
-	if code == 10001 {
+	// 已签可能以业务码或文案任一种形式出现，两者都认，避免把「已签过」报成失败
+	if code == 10001 || strings.Contains(msg, "已签") || strings.Contains(msg, "已领取") {
 		res.OK = true
 		res.Already = true
-		res.Message = "今日已签到"
+		if msg != "" {
+			res.Message = msg
+		} else {
+			res.Message = "今日已签到"
+		}
 		return res, nil
 	}
 	if code != 0 && code != 200 {

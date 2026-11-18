@@ -137,13 +137,13 @@ func (a *AiPy) Checkin(ctx context.Context, c Credential) (Result, error) {
 		res.Error = "网络错误: " + err.Error()
 		return res, nil
 	}
-	m, err := resp.JSON()
-	if err != nil {
-		res.Error = err.Error()
-		return res, nil
-	}
 	if resp.Status == 401 || resp.Status == 403 {
 		res.Error = fmt.Sprintf("登录已失效(%d)，请重新登录", resp.Status)
+		return res, nil
+	}
+	m, err := resp.JSON()
+	if err != nil {
+		res.Error = "响应解析失败: " + err.Error()
 		return res, nil
 	}
 	msg := envMsg(m)

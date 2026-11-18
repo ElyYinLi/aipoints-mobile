@@ -55,6 +55,9 @@ fi
 
 echo "== 3/8 解开 Mobile.aar =="
 mkdir -p "$OUT/aar"
+# 先清空：gomobile 多次构建会留下上一次的 classes.jar，残留 class 会被一起打进 dex
+rm -rf "$OUT/aar"/* "$OUT/classes" "$OUT/dex"
+mkdir -p "$OUT/aar" "$OUT/classes" "$OUT/dex"
 ( cd "$OUT/aar" && unzip -qo "$OUT/Mobile.aar" )
 
 echo "== 4/8 编译 Java =="
@@ -101,11 +104,17 @@ fi
 echo "== 8/8 对齐 + 签名 =="
 "$BT_DIR/zipalign" -f -p 4 "$OUT/base.apk" "$OUT/aligned.apk"
 
-KS="$OUT/self.jks"
+# 签名密钥必须跨构建固定，否则每次产出的 APK 签名不同：
+# 用户覆盖安装会失败，只能先卸载（本地账号与登录态全丢）。
+# 因此把密钥放在源码目录 android/signing/ 下随仓库走，而不是 build/ 里现生成。
+# 这是自签名自用场景；密钥泄露只影响「别人能否伪造升级包」，不涉及账号安全。
+KS="${POINTS_KEYSTORE:-$ROOT/android/signing/points.jks}"
 if [ ! -f "$KS" ]; then
-  keytool -genkeypair -v -keystore "$KS" -storepass points2024 -keypass points2024 \
-    -alias points -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=Points, OU=Self, O=Self, L=Local, C=CN" >/dev/null 2>&1
+  echo "缺少签名密钥：$KS"
+  echo "首次构建可执行：keytool -genkeypair -v -keystore \"$KS\" -storepass points2024 \"
+  echo "  -keypass points2024 -alias points -keyalg RSA -keysize 2048 -validity 10000 \"
+  echo "  -dname CN=Points,OU=Self,O=Self,L=Local,C=CN"
+  exit 1
 fi
 "$BT_DIR/apksigner" sign \
   --ks "$KS" --ks-pass pass:points2024 --key-pass pass:points2024 \
