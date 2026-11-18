@@ -54,7 +54,12 @@ func (r *Registry) All() []Meta {
 	defer r.mu.RUnlock()
 	out := make([]Meta, 0, len(r.m))
 	for _, p := range r.m {
-		out = append(out, p.Meta())
+		m := p.Meta()
+		// 支持任务领取的平台打个标记，前端据此显示「任务」入口
+		if _, ok := p.(TaskClaimer); ok {
+			m.Tasks = true
+		}
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

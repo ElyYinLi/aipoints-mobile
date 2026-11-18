@@ -59,6 +59,8 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/query", s.handleQuery)
 	mux.HandleFunc("/api/checkin", s.handleCheckin)
+	mux.HandleFunc("/api/tasks", s.handleTasks)
+	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。
@@ -199,7 +201,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	out := make([]provider.Snapshot, len(list))
 	var wg sync.WaitGroup
 	for i, a := range list {
-		out[i] = provider.Snapshot{Provider: a.Provider, AccountID: a.AccountID, At: time.Now()}
+		out[i] = provider.Snapshot{Provider: a.Provider, AccountID: a.AccountID, Label: a.Label, At: time.Now()}
 		if !a.Enabled {
 			out[i].Error = "已停用"
 			continue
@@ -215,7 +217,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		wg.Add(1)
-		go func(i int, p provider.Provider, cred provider.Credential) {
+		go func(i int, p provider.Provider, cred provider.Credential, label string) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 			defer cancel()
@@ -232,8 +234,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if snap.At.IsZero() {
 				snap.At = time.Now()
 			}
+			// 备注（label）不在 provider 查询结果里，这里从账号记录回填，
+			// 否则前端卡片永远只能显示一长串 account_id，账号多了认不出谁是谁。
+			if snap.Label == "" {
+				snap.Label = label
+			}
 			out[i] = snap
-		}(i, p, cred)
+		}(i, p, cred, a.Label)
 	}
 	wg.Wait()
 	writeJSON(w, out)

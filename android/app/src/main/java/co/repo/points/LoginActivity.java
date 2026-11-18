@@ -66,6 +66,12 @@ public final class LoginActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
+        // 百度搭子：移动 UA 会被重定向到 App 下载页，看不到登录入口。
+        // 套一个桌面 Chrome UA，让 dumate.baidu.com 按 PC 版渲染。
+        if ("dumate".equals(provider)) {
+            s.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        }
+
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {

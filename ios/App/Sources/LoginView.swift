@@ -33,6 +33,12 @@ struct LoginView: UIViewControllerRepresentable {
         let web = WKWebView(frame: .zero, configuration: cfg)
         web.navigationDelegate = context.coordinator
 
+        // 百度搭子：移动 UA 会被重定向到 App 下载页，根本看不到登录入口。
+        // 给它套一个桌面 Chrome UA，让 dumate.baidu.com 按 PC 版渲染。
+        if provider == "dumate" {
+            web.customUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        }
+
         // 容器必须有非零尺寸：零尺寸父视图里的 WKWebView 可能不加载页面（白屏）
         let vc = UIViewController()
         vc.view.backgroundColor = .systemBackground

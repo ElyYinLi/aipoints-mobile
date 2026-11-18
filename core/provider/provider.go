@@ -42,8 +42,11 @@ type Credential struct {
 
 // Snapshot 是一次查询的归一化结果。
 type Snapshot struct {
-	Provider    string  `json:"provider"`
-	AccountID   string  `json:"account_id"`
+	Provider  string `json:"provider"`
+	AccountID string `json:"account_id"`
+	// Label 是账号备注（主号 / 小号等），由面板在查询时从账号库回填，
+	// provider 本身不产生这个字段。前端据此区分多个同平台账号。
+	Label       string  `json:"label,omitempty"`
 	OK          bool    `json:"ok"`
 	Balance     float64 `json:"balance"`
 	BalanceText string  `json:"balance_text,omitempty"`
@@ -77,6 +80,9 @@ type Meta struct {
 	Auth   string `json:"auth"`   // cookie / token / page
 	Mobile string `json:"mobile"` // ok / conditional / blocked
 	Note   string `json:"note,omitempty"`
+	// Tasks 表示该平台支持「每日任务领取」（实现了 TaskClaimer）。
+	// 前端据此决定是否在账号卡片上显示「任务」按钮。
+	Tasks bool `json:"tasks,omitempty"`
 }
 
 // Provider 是所有平台适配器必须实现的接口。
@@ -86,4 +92,32 @@ type Provider interface {
 	Query(ctx context.Context, c Credential) (Snapshot, error)
 	// Checkin 执行签到。写操作，调用方必须先确认今日未签。
 	Checkin(ctx context.Context, c Credential) (Result, error)
+}
+
+// Task 是平台「每日任务」里的一项（AiPy 的 /api/user/daily_tasks/status）。
+type Task struct {
+	// TaskType 是领取时回传上游的标识。
+	TaskType string `json:"task_type"`
+	Title    string `json:"title"`
+	// Reward 是该任务可得奖励，单位见 Unit（AiPy 已换算为灵石）。
+	Reward   float64 `json:"reward"`
+	Progress int     `json:"progress"`
+	Target   int     `json:"target"`
+	// Status 上游原样返回：locked（未达标）/ claimed（已领取）。
+	Status string `json:"status"`
+	// Claimable 是否当前可领取（进度达标且未领取）。
+	Claimable bool `json:"claimable"`
+	// Unit 奖励单位文案（AiPy 是「灵石」，换算已在 provider 内完成）。
+	Unit string `json:"unit,omitempty"`
+}
+
+// TaskClaimer 是「支持每日任务领取」的平台才实现的扩展接口。
+// 不是所有平台都有任务体系（WorkBuddy / 百度搭子等就没有），所以不放进
+// Provider 主接口，用类型断言按需启用，前端据此决定是否显示「任务」按钮。
+type TaskClaimer interface {
+	Provider
+	// Tasks 只读：返回该账号当日任务列表。
+	Tasks(ctx context.Context, c Credential) ([]Task, error)
+	// ClaimTask 领取指定任务奖励，返回本次获得的奖励（平台口径）。
+	ClaimTask(ctx context.Context, c Credential, taskType string) (Result, error)
 }

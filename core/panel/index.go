@@ -159,6 +159,10 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .pill[disabled]{opacity:.4}
 .pill.done{background:var(--ok-c);color:var(--ok)}
 .pill.fail{background:var(--bad-c);color:var(--bad)}
+/* 任务按钮：与签到并排，用低调的描边色区分主次 */
+.pill.task{background:var(--surface-2);color:var(--on-surface-v)}
+.pill.task:active{background:var(--surface-3)}
+.c-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 
 /* 骨架屏：首屏立刻有结构，避免白屏等待的「卡」感 */
 .skel{height:118px;border-radius:var(--r-xl);background:var(--card);border:1px solid var(--outline-v);
@@ -296,6 +300,15 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 }
 .mini:active{transform:scale(.95)}
 .mini.del{background:var(--bad-c);color:var(--bad)}
+.mini.go{background:var(--primary-c);color:var(--on-primary-c)}
+/* 每日任务行 */
+.task-row{
+  display:flex;align-items:center;gap:10px;padding:11px 12px;
+  background:var(--surface-1);border-radius:var(--r-md);margin-bottom:8px;
+}
+.task-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.task-title{font-size:13.5px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task-sub{font-size:11.5px;color:var(--on-surface-v);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sect-h{font-size:13px;font-weight:680;color:var(--on-surface-v);
   margin:18px 4px 10px;letter-spacing:.02em}
 .sect-h:first-child{margin-top:6px}
@@ -395,17 +408,29 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   function j(u, o){
     // 带超时的 fetch：弱网/平台接口挂住时不让骨架屏无限转，超时给出可操作的提示。
     // 引擎侧每个账号 20s 超时且并行，这里留 25s 余量。
-    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    var opt = o || {};
-    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
-    if (ctrl) opt.signal = ctrl.signal;
-    return fetch(u, opt).then(function(r){
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).catch(function(e){
-      if (e && (e.name === 'AbortError')) throw new Error('请求超时，请检查网络后下拉刷新');
-      throw e;
-    }).then(function(v){ clearTimeout(timer); return v; }, function(e){ clearTimeout(timer); throw e; });
+    // 关键：iOS 进入后台后，本机回环连接的 socket 可能被系统挂起/复用失效，
+    // 回到前台第一次 fetch 会直接失败。这里对「网络层失败」自动重试一次，
+    // 第二次往往能拿到新连接，避免「读取失败 + 下拉刷新也救不回来」的死局。
+    var attempt = function(tries){
+      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var opt = o || {};
+      var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
+      if (ctrl) opt.signal = ctrl.signal;
+      return fetch(u, opt).then(function(r){
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).catch(function(e){
+        if (e && e.name === 'AbortError') throw new Error('请求超时，请检查网络后下拉刷新');
+        if (tries < 1 && (e instanceof TypeError || /fetch|network|failed/i.test(String(e.message)))){
+          // 连接层失败（不是业务错误/超时）：稍等片刻重试一次
+          return new Promise(function(resolve){ setTimeout(resolve, 500); }).then(function(){
+            return attempt(tries + 1);
+          });
+        }
+        throw e;
+      }).then(function(v){ clearTimeout(timer); return v; }, function(e){ clearTimeout(timer); throw e; });
+    };
+    return attempt(0);
   }
 
   /* ---------- 通用 UI 工具 ---------- */
@@ -580,6 +605,21 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     else stTxt.textContent = r.checked_in ? '今天已签到' : '今天还没签';
     st.appendChild(stTxt);
 
+    // 右侧按钮组：任务（仅支持平台）+ 签到
+    var btns = document.createElement('div');
+    btns.className = 'c-actions';
+
+    if (r.has_tasks && !r.error){
+      var taskBtn = document.createElement('button');
+      taskBtn.className = 'pill task';
+      taskBtn.textContent = '任务';
+      taskBtn.setAttribute('aria-label', '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务');
+      taskBtn.addEventListener('click', function(){
+        openTasks(r);
+      });
+      btns.appendChild(taskBtn);
+    }
+
     var btn = document.createElement('button');
     btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
     btn.setAttribute('aria-label', (r.error ? '重试 ' : (r.checked_in ? '已签到 ' : '签到 ')) + (r.provider_name || r.provider || ''));
@@ -588,8 +628,9 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     btn.addEventListener('click', function(){
       doCheckin(r.account_id, btn);
     });
+    btns.appendChild(btn);
 
-    foot.appendChild(st); foot.appendChild(btn);
+    foot.appendChild(st); foot.appendChild(btns);
     card.appendChild(foot);
     return card;
   }
@@ -642,7 +683,10 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     for (var i = 0; i < state.providers.length; i++) byId[state.providers[i].id] = state.providers[i];
     for (var j = 0; j < rows.length; j++){
       var p = byId[rows[j].provider];
-      if (p) rows[j].provider_name = p.name;
+      if (p) {
+        rows[j].provider_name = p.name;
+        rows[j].has_tasks = !!p.tasks;
+      }
     }
     return rows;
   }
@@ -663,9 +707,14 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       state.rows = enrich(rows);
       render();
     }).catch(function(e){
-      $('list').innerHTML =
+      // 失败态给出可点击的重试，而不是一行"读取失败"让用户卡死
+      var list = $('list');
+      list.innerHTML =
         '<div class="empty"><div class="ring">' + ICON('warn') + '</div>' +
-        '<h2>读取失败</h2><p>' + esc(e.message) + '</p></div>';
+        '<h2>读取失败</h2><p>' + esc(e.message) + '</p>' +
+        '<button class="btn filled" id="retryBtn" style="max-width:220px">重新加载</button></div>';
+      var rb = $('retryBtn');
+      if (rb) rb.addEventListener('click', function(){ load(false); });
     });
   }
 
@@ -1032,6 +1081,73 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         meta.textContent = '版本 ' + (m.version || '—') + ' · 已支持 ' + (m.providers || 0) + ' 个平台';
       }).catch(function(){});
     });
+  }
+
+  /* ---------- 每日任务（AiPy 等支持任务的平台） ---------- */
+  function openTasks(r){
+    var name = platformName(r.provider);
+    var box = null;
+    var s = openSheet(name + ' · 每日任务', r.label || r.account_id || '', function(body, close){
+      box = el('div', '');
+      body.appendChild(box);
+      box.appendChild(el('div', 'sheet-sub', '加载中…'));
+      loadTasks();
+    });
+
+    function loadTasks(){
+      j('/api/tasks?account=' + encodeURIComponent(r.account_id)).then(function(res){
+        if (!box) return;
+        box.textContent = '';
+        var tasks = (res && res.tasks) || [];
+        if (!tasks.length){
+          box.appendChild(el('div', 'sheet-sub', res && res.error ? res.error : '当前没有可展示的任务'));
+          return;
+        }
+        tasks.forEach(function(t){
+          var row = el('div', 'task-row');
+          var info = el('div', 'task-info');
+          var t1 = el('div', 'task-title');
+          t1.textContent = t.title || t.task_type || '任务';
+          info.appendChild(t1);
+          var t2 = el('div', 'task-sub');
+          var rewardTxt = (t.reward > 0 ? '+' + fmt(t.reward) + ' ' + (t.unit || '') : '');
+          var progressTxt = (t.target > 0 ? t.progress + '/' + t.target : '');
+          t2.textContent = [rewardTxt, progressTxt, t.status === 'claimed' ? '已领取' : ''].filter(Boolean).join(' · ');
+          info.appendChild(t2);
+          row.appendChild(info);
+
+          var act = el('button', 'mini' + (t.claimable ? ' go' : ''));
+          if (t.status === 'claimed'){
+            act.textContent = '已领'; act.disabled = true;
+          } else if (t.claimable){
+            act.textContent = '领取';
+          } else {
+            act.textContent = '未达标'; act.disabled = true;
+          }
+          if (t.claimable){
+            act.addEventListener('click', function(){
+              act.disabled = true; act.textContent = '领取中…';
+              post('/api/tasks/claim', { account: r.account_id, task_type: t.task_type })
+                .then(function(res){
+                  if (res && res.error){ toast(res.error); act.disabled = false; act.textContent = '领取'; }
+                  else {
+                    toast('领取成功' + (res && res.gain ? '，+' + fmt(res.gain) + ' ' + (res.unit || '灵石') : ''));
+                    loadTasks();
+                    load(true);
+                  }
+                })
+                .catch(function(e){ toast('领取失败：' + e.message); act.disabled = false; act.textContent = '领取'; });
+            });
+          }
+          row.appendChild(act);
+          box.appendChild(row);
+        });
+      }).catch(function(e){
+        if (!box) return;
+        box.textContent = '';
+        box.appendChild(el('div', 'sheet-sub', '读取任务失败：' + e.message));
+      });
+    }
   }
 
   /* ---------- 卡片右上角：单账号操作 ---------- */

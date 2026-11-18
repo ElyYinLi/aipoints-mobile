@@ -284,4 +284,142 @@ func (a *AiPy) baseHost(c Credential) string {
 	return u.Host
 }
 
+// Tasks 返回每日任务列表。上游 data 可能是数组或 {tasks:[...]}，都兼容。
+//
+// 字段实测（trustoken v1.3.2）：{task_type,title,reward,progress,target,status}，
+// status 取 "locked"（未达标）/ "claimed"（已领取）。是否可领只看
+// progress>=target 且 status!=claimed，上游不返回 claimed/can_claim 布尔。
+func (a *AiPy) Tasks(ctx context.Context, c Credential) ([]Task, error) {
+	if strings.TrimSpace(c.Cookie) == "" && strings.TrimSpace(c.AccessToken) == "" {
+		return nil, fmt.Errorf("缺少 Cookie 或访问令牌")
+	}
+	resp, err := a.c.DoJSON(ctx, "GET", a.base(c)+"/api/user/daily_tasks/status", a.headers(c), nil)
+	if err != nil {
+		return nil, fmt.Errorf("网络错误: %w", err)
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		return nil, fmt.Errorf("登录已失效(%d)，请重新登录", resp.Status)
+	}
+	m, err := resp.JSON()
+	if err != nil {
+		return nil, fmt.Errorf("响应解析失败: %w", err)
+	}
+	if !envOK(m) {
+		return nil, fmt.Errorf("上游返回: %s", envMsg(m))
+	}
+	data := digMap(m, "data")
+	if data == nil {
+		data = m
+	}
+	// 兼容两种形状：顶层数组 / data 是数组 / data.tasks 是数组
+	var raws []any
+	switch v := pick(data, "tasks", "list").(type) {
+	case []any:
+		raws = v
+	}
+	if raws == nil {
+		if v, ok := data["__array__"].([]any); ok {
+			raws = v
+		}
+	}
+	// data 本身可能是数组（digMap 拿不到数组，退回从 m 取）
+	if raws == nil {
+		if v, ok := m["data"].([]any); ok {
+			raws = v
+		}
+	}
+	if raws == nil {
+		if v, ok := m["tasks"].([]any); ok {
+			raws = v
+		}
+	}
+	out := make([]Task, 0, len(raws))
+	for _, r := range raws {
+		mm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		tt := strOf(pick(mm, "task_type", "type", "id"))
+		title := strOf(pick(mm, "title", "name", "task_name"))
+		if tt == "" && title == "" {
+			continue
+		}
+		reward := numOf(pick(mm, "reward", "bonus", "quota"))
+		progress := int(numOf(pick(mm, "progress", "done")))
+		target := int(numOf(pick(mm, "target", "need", "total")))
+		status := strOf(pick(mm, "status"))
+		t := Task{
+			TaskType: tt,
+			Title:    title,
+			// 上游 reward 是额度，换算成灵石与 Query 余额口径一致
+			Reward:   reward / aipyQuotaPerStone,
+			Progress: progress,
+			Target:   target,
+			Status:   status,
+			Unit:     "灵石",
+		}
+		// 可领：进度达标 且 未领取
+		t.Claimable = target > 0 && progress >= target && status != "claimed"
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// ClaimTask 领取某个每日任务奖励，返回本次奖励（灵石口径，与 Checkin 一致）。
+func (a *AiPy) ClaimTask(ctx context.Context, c Credential, taskType string) (Result, error) {
+	res := Result{Provider: "aipy", AccountID: c.AccountID, Unit: "灵石"}
+	if taskType == "" {
+		res.Error = "缺少任务标识"
+		return res, nil
+	}
+	if strings.TrimSpace(c.Cookie) == "" && strings.TrimSpace(c.AccessToken) == "" {
+		res.Error = "缺少 Cookie 或访问令牌"
+		return res, nil
+	}
+	resp, err := a.c.DoJSON(ctx, "POST", a.base(c)+"/api/user/daily_tasks/claim",
+		a.headers(c), map[string]string{"task_type": taskType})
+	if err != nil {
+		res.Error = "网络错误: " + err.Error()
+		return res, nil
+	}
+	if resp.Status == 401 || resp.Status == 403 {
+		res.Error = fmt.Sprintf("登录已失效(%d)，请重新登录", resp.Status)
+		return res, nil
+	}
+	m, err := resp.JSON()
+	if err != nil {
+		res.Error = "响应解析失败: " + err.Error()
+		return res, nil
+	}
+	msg := envMsg(m)
+	if !envOK(m) {
+		// 已领取 / 未达标都走 success=false，靠文案兜住
+		lower := strings.ToLower(msg)
+		if strings.Contains(msg, "已领") || strings.Contains(msg, "重复") ||
+			strings.Contains(msg, "未完成") || strings.Contains(msg, "未达标") ||
+			strings.Contains(lower, "already") || strings.Contains(lower, "claimed") ||
+			strings.Contains(lower, "not completed") {
+			res.Error = msg
+			return res, nil
+		}
+		res.Error = msg
+		return res, nil
+	}
+	data := digMap(m, "data")
+	if data == nil {
+		data = m
+	}
+	res.OK = true
+	res.Message = "领取成功"
+	if msg != "" {
+		res.Message = msg
+	}
+	// data.reward 是额度口径，换算成灵石
+	if v := numOf(pick(data, "reward", "bonus", "quota")); v > 0 {
+		res.Gain = v / aipyQuotaPerStone
+	}
+	return res, nil
+}
+
 var _ Provider = (*AiPy)(nil)
+var _ TaskClaimer = (*AiPy)(nil)
