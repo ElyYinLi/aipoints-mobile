@@ -61,6 +61,7 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/checkin", s.handleCheckin)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
+	mux.HandleFunc("/api/tasks/claim_all", s.handleTaskClaimAll)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。

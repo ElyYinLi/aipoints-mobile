@@ -130,15 +130,18 @@ func TestLingxiFlow(t *testing.T) {
 }
 
 // TestDumateQuota 验证「可用 = 总额 - 已用」与写接口带 x-bce-request-id。
+// 字段名以 dumate2api 网页端实测为准：hasIssued / totalPoints / usedPoints。
 func TestDumateQuota(t *testing.T) {
-	var gotReqID, gotCSRF string
+	var gotReqID, gotCSRF, gotClientType, quotaRawQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/dumate/points/loginBonusInfo":
-			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"signed_today": false}})
+			gotClientType = r.Header.Get("X-Dumate-Client-Type")
+			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"hasIssued": false}})
 		case "/api/dumate/points/quota_overview":
+			quotaRawQuery = r.URL.RawQuery
 			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{
-				"total_points": 2200, "used_points": 500,
+				"totalPoints": 2200, "usedPoints": 500,
 			}})
 		case "/api/dumate/points/loginBonus":
 			gotReqID = r.Header.Get("x-bce-request-id")
@@ -162,6 +165,17 @@ func TestDumateQuota(t *testing.T) {
 	if snap.Balance != 1700 {
 		t.Fatalf("可用积分期望 1700，实际 %v", snap.Balance)
 	}
+	if snap.CheckedIn {
+		t.Fatalf("hasIssued=false 时应为未签到")
+	}
+	// 网页端标识头缺失会被当成非浏览器来源，积分/状态接口返回空
+	if gotClientType != "web" {
+		t.Fatalf("必须带 X-Dumate-Client-Type: web，实际 %q", gotClientType)
+	}
+	// quota 接口必须带 clientType/timezone 参数，否则返回空
+	if !strings.Contains(quotaRawQuery, "clientType=desktop") {
+		t.Fatalf("quota_overview 应带 clientType 参数，实际 %q", quotaRawQuery)
+	}
 	res, _ := p.Checkin(context.Background(), cred)
 	if !res.OK {
 		t.Fatalf("签到应成功: %+v", res)
@@ -171,6 +185,44 @@ func TestDumateQuota(t *testing.T) {
 	}
 	if gotCSRF != "csrf-abc-123" {
 		t.Fatalf("csrftoken 头应从 bce-user-info 取值并去引号，实际 %q", gotCSRF)
+	}
+}
+
+// TestDumateCheckedIn 实测字段 hasIssued=true 时必须显示已签到。
+func TestDumateCheckedIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dumate/points/loginBonusInfo":
+			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"hasIssued": true}})
+		case "/api/dumate/points/quota_overview":
+			writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"totalPoints": 100, "usedPoints": 30}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p := NewDumate(httpx.New())
+	snap, _ := p.Query(context.Background(), Credential{Cookie: "BDUSS=1", Domain: srv.URL})
+	if !snap.CheckedIn {
+		t.Fatalf("hasIssued=true 时应显示已签到: %+v", snap)
+	}
+	if snap.Balance != 70 {
+		t.Fatalf("余额期望 70，实际 %v", snap.Balance)
+	}
+}
+
+// TestDumateAuthExpired 业务码 10001/10006 也应判为登录失效。
+func TestDumateAuthExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 10001, "msg": "登录态失效"})
+	}))
+	defer srv.Close()
+
+	p := NewDumate(httpx.New())
+	snap, _ := p.Query(context.Background(), Credential{Cookie: "BDUSS=1", Domain: srv.URL})
+	if snap.OK || !strings.Contains(snap.Error, "失效") {
+		t.Fatalf("10001 应判为登录失效: %+v", snap)
 	}
 }
 

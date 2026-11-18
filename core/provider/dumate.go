@@ -54,6 +54,9 @@ func (d *Dumate) headers(c Credential) map[string]string {
 		"Origin":     d.base(c),
 		"Referer":    d.base(c) + "/app",
 		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+		// 实测（dumate2api）：网页端请求必须带这个头，缺了会被当成非浏览器来源，
+		// 积分/状态接口直接返回空 → 表现为「积分恒 0、签到状态读不出来」。
+		"X-Dumate-Client-Type": "web",
 	}
 	// 关键：写接口必须带 csrftoken 头，值取自 bce-user-info cookie（去掉首尾引号）。
 	// 缺它时服务端会拒绝，且错误信息不直观（容易被当成 cookie 失效）。
@@ -99,13 +102,22 @@ func (d *Dumate) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Error = "响应解析失败: " + err.Error()
 		return snap, nil
 	}
-	// 百度网关的响应可能包在 data / result 里，字段名也可能是几种写法，统一下钻。
-	snap.CheckedIn = boolOf(digAny(m, "signed_today", "claimed", "today_signed", "is_signed", "login_bonus_claimed", "received"))
-	if v, ok := httpx.Num(digAny(m, "gain", "points", "reward", "bonus")); ok && v > 0 {
-		snap.Detail = "今日可得 " + fmtNum(v)
+	// 登录态失效的业务码：HTTP 200 但 code=10001/10006 也是失效（实测）
+	if code, ok := httpx.Num(m["code"]); ok && (code == 10001 || code == 10006) {
+		snap.Error = "登录已失效，请重新登录百度搭子"
+		return snap, nil
 	}
-	// 状态接口本身可能就带积分总额，先填上；额度总览接口拿到更准确的值再覆盖
-	if v, ok := httpx.Num(digAny(m, "total_points", "points_total", "total")); ok {
+	// 实测字段（dumate2api 网页端）：已签到标志是 hasIssued（今日登录奖励是否已发放）。
+	// 之前猜的 signed_today/claimed 等字段上游根本没有，导致「签完还显示未签到」。
+	snap.CheckedIn = boolOf(digAny(m, "hasIssued", "has_issued", "signed_today", "claimed", "is_signed", "received"))
+	if snap.CheckedIn {
+		snap.Detail = "今日已签到"
+	} else {
+		snap.Detail = "今日未签到"
+	}
+	// 签到信息接口本身带累计总积分：totalPoints（实测字段名）。
+	// 先填上；quota_overview 拿到可用余额（总额-已用）后再覆盖。
+	if v, ok := httpx.Num(digAny(m, "totalPoints", "total_points", "total")); ok {
 		snap.Balance = v
 		snap.BalanceText = fmtNum(v)
 	}
@@ -118,9 +130,12 @@ func (d *Dumate) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	return snap, nil
 }
 
-// quota 返回 (总额, 已用)。
+// quota 返回 (总额, 已用)。实测字段名是 totalPoints / usedPoints，
+// 且 URL 必须带 clientType/timezone 参数，否则返回空。
 func (d *Dumate) quota(ctx context.Context, c Credential) (float64, float64, bool) {
-	resp, err := d.c.DoJSON(ctx, "GET", d.base(c)+"/api/dumate/points/quota_overview", d.headers(c), nil)
+	resp, err := d.c.DoJSON(ctx, "GET",
+		d.base(c)+"/api/dumate/points/quota_overview?clientType=desktop&timezone=Asia%2FShanghai",
+		d.headers(c), nil)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -128,8 +143,8 @@ func (d *Dumate) quota(ctx context.Context, c Credential) (float64, float64, boo
 	if err != nil {
 		return 0, 0, false
 	}
-	total, ok1 := httpx.Num(digAny(m, "total_points", "total", "quota_total"))
-	used, ok2 := httpx.Num(digAny(m, "used_points", "used", "quota_used"))
+	total, ok1 := httpx.Num(digAny(m, "totalPoints", "total_points", "quota_total"))
+	used, ok2 := httpx.Num(digAny(m, "usedPoints", "used_points", "quota_used"))
 	if !ok1 {
 		return 0, 0, false
 	}
@@ -171,6 +186,11 @@ func (d *Dumate) Checkin(ctx context.Context, c Credential) (Result, error) {
 	}
 	msgD := strOf(pick(m, "msg", "message"))
 	if code, ok := httpx.Num(m["code"]); ok && code != 0 {
+		// 登录态失效业务码（HTTP 200 也会出现）
+		if code == 10001 || code == 10006 {
+			res.Error = "登录已失效，请重新登录百度搭子"
+			return res, nil
+		}
 		// 百度系业务码 0 表示成功。已经领过常以业务码报错形式返回，按已签处理。
 		if strings.Contains(msgD, "已领") || strings.Contains(msgD, "已签") || strings.Contains(msgD, "重复") {
 			res.OK, res.Already, res.Message = true, true, msgD

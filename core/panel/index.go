@@ -216,6 +216,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .btn:active{transform:scale(.975)}
 .btn[disabled]{opacity:.45}
 .btn.tonal{background:var(--surface-2);color:var(--on-surface)}
+/* 领任务按钮：青绿色，与「签到」在视觉上区分任务/签到两类动作 */
+.btn.task{background:var(--ok-c);color:var(--ok)}
 .btn.filled{background:var(--primary);color:var(--on-primary);box-shadow:0 6px 18px color-mix(in srgb,var(--primary) 32%,transparent)}
 .btn svg{width:19px;height:19px}
 
@@ -366,6 +368,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
 <div class="bar">
   <button class="btn tonal" id="btnAll" disabled>{{ICON:checkAll}}一键签到</button>
+  <button class="btn task" id="btnTasks" disabled>{{ICON:task}}领任务</button>
   <button class="btn filled" id="btnAdd">{{ICON:plus}}添加账号</button>
 </div>
 
@@ -666,6 +669,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         '</div>';
       $('btnAll').disabled = true;
       $('btnAll').setAttribute('aria-disabled', 'true');
+      $('btnTasks').disabled = true;
       return;
     }
 
@@ -675,6 +679,12 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     list.textContent = '';
     list.appendChild(frag);
     $('btnAll').disabled = state.busy;
+    // 「领任务」只在存在支持任务体系的账号时可点
+    var hasTaskAcct = false;
+    for (var m = 0; m < rows.length; m++){
+      if (rows[m].has_tasks && !rows[m].error){ hasTaskAcct = true; break; }
+    }
+    $('btnTasks').disabled = state.busy || !hasTaskAcct;
   }
 
   /* ---------- 数据 ---------- */
@@ -706,6 +716,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       }
       state.rows = enrich(rows);
       render();
+      // 返回成功标志：调用方（自动签到）据此判断是否需要 reload 兜底
+      return true;
     }).catch(function(e){
       // 失败态给出可点击的重试，而不是一行"读取失败"让用户卡死
       var list = $('list');
@@ -715,6 +727,9 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         '<button class="btn filled" id="retryBtn" style="max-width:220px">重新加载</button></div>';
       var rb = $('retryBtn');
       if (rb) rb.addEventListener('click', function(){ load(false); });
+      // 返回失败标志而不是抛出：下拉刷新/按钮刷新等调用点不用各自接异常，
+      // 自动签到则靠这个标志决定是否整页 reload 兜底。
+      return false;
     });
   }
 
@@ -750,6 +765,34 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
       .then(function(){
         state.busy = false;
         b.disabled = false; b.innerHTML = ICON('checkAll') + '一键签到';
+      });
+  }
+
+  function claimAllTasks(){
+    if (state.busy) return;
+    state.busy = true;
+    var b = $('btnTasks'); b.disabled = true; b.textContent = '领取中…';
+    j('/api/tasks/claim_all', { method: 'POST' })
+      .then(function(res){
+        var rows = (res && res.results) || [];
+        var claimed = 0, gain = 0, unit = '', bad = 0;
+        for (var i = 0; i < rows.length; i++){
+          claimed += rows[i].claimed || 0;
+          gain += rows[i].gain || 0;
+          if (rows[i].unit) unit = rows[i].unit;
+          if (rows[i].error) bad++;
+        }
+        var msg = claimed > 0
+          ? '已领 ' + claimed + ' 个任务' + (gain > 0 ? '，+' + fmt(gain) + ' ' + (unit || '') : '')
+          : '没有可领取的任务';
+        if (bad) msg += '，' + bad + ' 个账号有失败';
+        toast(msg);
+        return load(true);
+      })
+      .catch(function(e){ toast('领取失败：' + e.message); })
+      .then(function(){
+        state.busy = false;
+        b.disabled = false; b.innerHTML = ICON('task') + '领任务';
       });
   }
 
@@ -799,6 +842,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     setTimeout(function(){ b.classList.remove('spin'); }, 1200);
   });
   $('btnAll').addEventListener('click', checkinAll);
+  $('btnTasks').addEventListener('click', claimAllTasks);
   $('btnAdd').addEventListener('click', openAddSheet);
   $('btnSettings').addEventListener('click', openSettings);
 
@@ -1270,9 +1314,19 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
     loginPendingAt = 0;
     load(true).then(function(){ toast('已同步账号'); });
   }
-  function autoCheckin(){
+  function autoCheckin(allowReload){
     if (autoTask) return autoTask;
-    autoTask = load(true).then(function(){
+    autoTask = load(true).then(function(ok){
+      if (!ok){
+        // iOS 后台回前台：WKWebView 的网络进程可能被系统回收，之后所有 fetch
+        // 都会持续失败，重试也救不回来。此时唯一出路是整页 reload，让 WebKit
+        // 重建网络栈。先写恢复标志，新页面加载后据此把自动签到续上。
+        if (allowReload){
+          try { localStorage.setItem('resume_checkin', '1'); } catch (err) {}
+          notifyReload();
+        }
+        return false;
+      }
       var need = false;
       for (var i = 0; i < state.rows.length; i++){
         var r = state.rows[i];
@@ -1283,18 +1337,45 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
         return true;
       }
       return need;
-    }).catch(function(){ return false; }).then(function(v){
+    }).then(function(v){
       // 留一点冷却，避免刚结束又被下一次唤醒立刻触发
       setTimeout(function(){ autoTask = null; }, 3000);
       return v;
     });
     return autoTask;
   }
-  window.__pointsAutoCheckin = autoCheckin;
+  // 壳层调用（打开 App / 回到前台）默认允许失败时整页重载；
+  // 页面自身的 visibilitychange 同理；只有 reload 后的续跑（resumeCheckin）
+  // 传 false，避免「失败 → reload → 又失败 → 又 reload」的死循环。
+  window.__pointsAutoCheckin = function(){ return autoCheckin(true); };
+
+  // notifyReload：通知壳层重建页面。优先走 PointsBridge（Android 已实现），
+  // 没有桥时直接 location.reload() 兜底——iOS WKWebView 里整页 reload
+  // 同样会让 WebKit 重建网络连接。
+  function notifyReload(){
+    try {
+      if (window.PointsBridge && typeof PointsBridge.reload === 'function'){
+        PointsBridge.reload();
+        return;
+      }
+    } catch (e) {}
+    try { location.reload(); } catch (e) {}
+  }
 
   /* ---------- 启动 ---------- */
   showSkeleton();
   load(true);
+  // reload 续跑：iOS 后台回前台时网络进程被回收，fetch 持续失败 → autoCheckin
+  // 写下 resume_checkin 标志后整页 reload。这里把上次没做完的自动签到续上。
+  // 传 false：这次如果再失败就只显示错误，绝不再 reload（防死循环）。
+  (function(){
+    var resume = '';
+    try { resume = localStorage.getItem('resume_checkin') || ''; } catch (e) {}
+    if (resume === '1'){
+      try { localStorage.removeItem('resume_checkin'); } catch (e) {}
+      setTimeout(function(){ autoCheckin(false); }, 800);
+    }
+  })();
   // 壳层在 WorkBuddy 登录后会 reload 本页，内存变量清零：
   // 从 localStorage 认出「上次是去登录 WorkBuddy」，把换取 token 的流程续上。
   (function(){
@@ -1309,11 +1390,11 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState !== 'visible') return;
     resumeAfterLogin();
-    autoCheckin();
+    autoCheckin(true);
   });
   // bfcache 恢复（iOS 从登录页返回常见）：pageshow 的 persisted=true 时脚本不会重跑
   window.addEventListener('pageshow', function(e){
-    if (e.persisted) { resumeAfterLogin(); autoCheckin(); }
+    if (e.persisted) { resumeAfterLogin(); autoCheckin(true); }
   });
 })();
 
@@ -1328,6 +1409,7 @@ function ICON(name){
          '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
          '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
     refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
+    task:'<rect x="4" y="3.5" width="15" height="15" rx="3"/><path d="M8.5 12l2.5 2.5 5-5.5"/>',
     gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.2M12 19.3v2.2M21.5 12h-2.2M4.7 12H2.5M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6M18.7 18.7l-1.6-1.6M6.9 6.9L5.3 5.3"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
@@ -1342,7 +1424,7 @@ var indexHTML = buildIndex()
 
 func buildIndex() string {
 	out := indexTmpl
-	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow"} {
+	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task"} {
 		out = strings.ReplaceAll(out, "{{ICON:"+name+"}}", iconSVG(name))
 	}
 	return out

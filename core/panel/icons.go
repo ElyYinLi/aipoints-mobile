@@ -28,6 +28,8 @@ func iconSVG(name string) string {
 		"warn":  `<path d="M12 4l9 16H3z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none"/>`,
 		"clock": `<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>`,
 		"coin":  `<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 9.8h3.8a1.9 1.9 0 0 1 0 3.8H9.5"/>`,
+		// 任务清单 + 对勾
+		"task": `<rect x="4" y="3.5" width="15" height="15" rx="3"/><path d="M8.5 12l2.5 2.5 5-5.5"/>`,
 	}
 	path, ok := body[name]
 	if !ok {
