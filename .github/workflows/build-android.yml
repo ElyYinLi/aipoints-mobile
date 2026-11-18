@@ -1,7 +1,7 @@
 name: build-android
 
-# 仓库是公开的：标准托管 runner（Linux / macOS）在公开仓库下**完全免费**，
-# 不消耗账号额度，所以每次 push 都能自动构建，iOS 也可以随便跑。
+# 仓库是公开的：标准托管 runner 在公开仓库下完全免费、不消耗账号额度，
+# 所以 push 就能自动出包。
 on:
   push:
     branches: [main]
@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.24'
           cache-dependency-path: core/go.sum
 
       - uses: actions/setup-java@v4
@@ -32,27 +32,35 @@ jobs:
           go test ./...
 
       - name: 准备 gomobile（GOPATH 模式）
-        # gomobile 在 module 模式下会强迫 core/go.mod 依赖 golang.org/x/mobile，
-        # 而后者要求 go>=1.26，会把引擎的 go 指令一起抬高。这里改用 GOPATH 模式隔离。
+        # gomobile bind 在 module 模式下会把 golang.org/x/mobile 拉进 core/go.mod，
+        # 而新版本 x/mobile 要求 go>=1.24，会连带抬高引擎的 go 指令。
+        # 这里把 x/mobile 源码放进 GOPATH/src 并用 GO111MODULE=off 运行，
+        # 使 gomobile 自己的依赖与引擎的 go.mod 完全隔离。
+        #
+        # 坑：不能在 /tmp 里 `go mod init`——Go 直接忽略系统临时目录下的 go.mod，
+        # 报 "go.mod file not found"（上一版构建就是卡在这里）。
         run: |
+          set -euo pipefail
+          GP="$(go env GOPATH)"
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
-          GP="$(go env GOPATH)"
-          MODVER="$(cd core && go list -m -f '{{.Version}}' golang.org/x/mobile 2>/dev/null || true)"
-          if [ -z "$MODVER" ]; then
-            # 未在 go.mod 里声明时，从模块缓存里取一份源码塞进 GOPATH/src
-            cd /tmp
-            go mod init tmp >/dev/null 2>&1 || true
-            go get golang.org/x/mobile/bind@latest >/dev/null
-            SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER:-$(cd /tmp && go list -m -f '{{.Version}}' golang.org/x/mobile)}"
-            mkdir -p "$GP/src/golang.org/x"
-            cp -r "$SRC" "$GP/src/golang.org/x/mobile"
-            rm -f "$GP/src/golang.org/x/mobile/go.mod" "$GP/src/golang.org/x/mobile/go.sum"
-          fi
-          gomobile init
 
-      - name: 安装 Android SDK
-        # runner 已自带 SDK，这里只确保 build-tools / platform / ndk 版本存在
+          TMPMOD="$(mktemp -d)"
+          ( cd "$TMPMOD" && go mod init tmp && go get golang.org/x/mobile/bind@latest >/dev/null )
+          MODVER="$(cd "$TMPMOD" && go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER}"
+          echo "x/mobile ${MODVER} -> $SRC"
+          mkdir -p "$GP/src/golang.org/x"
+          rm -rf "$GP/src/golang.org/x/mobile"
+          cp -r "$SRC" "$GP/src/golang.org/x/mobile"
+          chmod -R u+w "$GP/src/golang.org/x/mobile"
+          rm -f "$GP/src/golang.org/x/mobile/go.mod" "$GP/src/golang.org/x/mobile/go.sum"
+          GO111MODULE=off gomobile init
+          # gomobile init 会为 ARM 交叉编译并预编译标准库，首次十几分钟；
+          # 这一步失败时直接中止，后面的构建必然失败，报错也更清楚。
+          ls "$GP/src/golang.org/x/mobile" >/dev/null
+
+      - name: 安装 Android SDK 组件
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \

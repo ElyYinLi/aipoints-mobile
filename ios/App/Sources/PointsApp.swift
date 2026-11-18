@@ -1,5 +1,7 @@
 import SwiftUI
 import WebKit
+import BackgroundTasks
+import Mobile
 
 /// 主界面：全屏 WKWebView，加载 Go 引擎在本机回环端口起的面板。
 ///
@@ -8,12 +10,18 @@ import WebKit
 @main
 struct PointsApp: App {
     @StateObject private var engine = Engine.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(engine)
                 .preferredColorScheme(nil)   // 跟随系统，HTML 里有 prefers-color-scheme
+        }
+        .onChange(of: scenePhase) { phase in
+            // 进后台时登记一次系统后台刷新机会（iOS 不保证时刻，只作为补签机会）。
+            // 放在 scenePhase 里而不是 AppDelegate，省掉一个 UIKit 桥接。
+            if phase == .background { BackgroundRefresh.schedule() }
         }
     }
 }
@@ -67,8 +75,7 @@ struct LoginTarget: Identifiable {
 struct LoginSheet: View {
     let provider: String
     var onDone: (String?) -> Void
-    /// 重新挂载 LoginView 用：点「完成」时强制提取一次
-    @State private var extractTick = 0
+    /// 点「完成」时强制提取一次：以新参数重建 LoginView 触发提取
     @State private var forcedExtract = false
 
     var body: some View {
@@ -76,11 +83,10 @@ struct LoginSheet: View {
             Group {
                 if let url = LoginCoordinator.shared.url(for: provider) {
                     LoginView(provider: provider, url: url,
-                              forceExtract: forcedExtract,
-                              extractTick: extractTick) { cookies in
+                              forceExtract: forcedExtract) { cookies in
                         onDone(cookies)
                     }
-                    .id(extractTick)
+                    .id(forcedExtract)   // 翻转即重建，makeUIViewController 里走强制提取分支
                 } else {
                     Text("未配置登录入口")
                 }
@@ -95,8 +101,7 @@ struct LoginSheet: View {
                 // 给用户一个明确出口，否则只能取消重来。
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
-                        forcedExtract = true
-                        extractTick += 1   // 重建 LoginView，用新参数触发强制提取
+                        forcedExtract = true   // 重建 LoginView，用新参数触发强制提取
                     }
                 }
             }
@@ -177,6 +182,37 @@ struct PanelWebView: UIViewRepresentable {
                 decisionHandler(.cancel)
             } else {
                 decisionHandler(.cancel)
+            }
+        }
+    }
+}
+
+/// 后台刷新：iOS 只保证「系统愿意给的时候」执行一次，不保证时刻。
+/// 这里只做一次「打开面板 → 触发一次自动签到」，不常驻、不保活。
+///
+/// 说明：真实生效需要主 target 打开 Background Modes(fetch)，且
+/// BGTaskSchedulerPermittedIdentifiers 里登记该标识（Info.plist 已写）。
+/// 拿不到调度时就静默返回——前台「打开即签到」才是主路径。
+enum BackgroundRefresh {
+    static let taskID = "co.repo.points.refresh"
+
+    static func schedule() {
+        guard #available(iOS 13.0, *) else { return }
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
+        let req = BGAppRefreshTaskRequest(identifier: taskID)
+        req.earliestBeginDate = Date(timeIntervalSinceNow: 45 * 60)  // 至少 45 分钟后
+        try? BGTaskScheduler.shared.submit(req)
+    }
+
+    static func register() {
+        guard #available(iOS 13.0, *) else { return }
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: nil) { task in
+            task.expirationHandler = { task.setTaskCompleted(success: false) }
+            // 引擎此刻可能还没起来（冷启动后台唤醒）：先用已有账号库做一次签到
+            DispatchQueue.global(qos: .utility).async {
+                let reply = MobileCheckinAll() ?? "[]"
+                task.setTaskCompleted(success: reply.contains("\"error\":\"") == false)
+                schedule()
             }
         }
     }

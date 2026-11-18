@@ -4,81 +4,111 @@
 # 只在 macOS 上可跑。CI 里对应 .github/workflows/build-ios.yml。
 #
 # 设计取舍（与常见方案对比）：
-#   1. 不用 xcodeproj —— 本仓库没有 .xcodeproj，直接用 swiftc 手工组装 .app。
-#      好处：免去 `xcodebuild -project` 对工程文件的依赖，CI 上不需要生成工程；
-#      代价：资源要用 actool 单独编，或用现成的 Info.plist + Assets。
+#   1. 【重点】不用 xcodebuild 编 Swift，而是 SwiftPM + `swift build`：
+#      仓库里没有 .xcodeproj，xcodebuild 需要工程文件；SwiftPM 只需要一个
+#      Package.swift，CI 上零依赖。之前直接 `swiftc -framework Mobile` 链接
+#      静态 framework 会失败（静态库的 .swiftmodule 不被 -F 正确识别）。
 #   2. gomobile bind 产出的是【静态库】而非 dylib —— 后者会被塞进 Frameworks/
-#      目录，自签工具（LiveContainer 等）会报 `Invalid mach-o file!`。
-#   3. 只编 arm64（真机）+ 可选模拟器切片，减小产物。
+#      目录，自签工具（SideStore / LiveContainer 等）会报 `Invalid mach-o file!`。
+#   3. 只编 arm64（真机），减小产物。
+#   4. 用 ldid（Theos 自带）做 ad-hoc 签名并写入 entitlements；没有 ldid 时
+#      退回 codesign --sign -。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="$ROOT/core"
 OUT="$ROOT/ios/build"
 APP="$OUT/Points.app"
-SDK_IPHONEOS="$(xcrun --sdk iphoneos --show-sdk-path)"
-MIN_IOS="15.0"
+XCF="$OUT/Mobile.xcframework"
+MIN_IOS="${MIN_IOS:-15.0}"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/ios/App/Info.plist" 2>/dev/null || echo 0.0.0)"
 
-mkdir -p "$OUT" "$APP"
+mkdir -p "$OUT"
+rm -rf "$APP" "$OUT/Payload"
+mkdir -p "$APP"
 
-echo "== 1/6 生成 Mobile.xcframework =="
-if [ ! -d "$OUT/Mobile.xcframework" ]; then
+# ---------------------------------------------------------------- 1. Go 引擎
+echo "== 1/6 生成 Mobile.xcframework (ios/arm64) =="
+export PATH="$PATH:$(go env GOPATH)/bin"
+if [ ! -d "$XCF" ]; then
+  command -v gomobile >/dev/null || go install golang.org/x/mobile/cmd/gomobile@latest
+  command -v gobind   >/dev/null || go install golang.org/x/mobile/cmd/gobind@latest
   ( cd "$CORE" && go build ./... )
-  command -v gomobile >/dev/null || {
-    go install golang.org/x/mobile/cmd/gomobile@latest
-    go install golang.org/x/mobile/cmd/gobind@latest
-  }
-  ( cd "$CORE" && gomobile bind -target=ios -iosversion="$MIN_IOS" \
-      -o "$OUT/Mobile.xcframework" ./mobile )
+  ( cd "$CORE" && gomobile bind \
+      -target=ios \
+      -iosversion="$MIN_IOS" \
+      -ldflags "-s -w" \
+      -o "$XCF" ./mobile )
 fi
+[ -d "$XCF/ios-arm64/Mobile.framework" ] || { echo "xcframework 结构异常"; find "$XCF" -maxdepth 3; exit 1; }
 
-echo "== 2/6 编译 Swift =="
-SWIFT_SOURCES=$(find "$ROOT/ios/App/Sources" -name '*.swift')
-# shellcheck disable=SC2086
-xcrun -sdk iphoneos swiftc \
-  -target arm64-apple-ios${MIN_IOS} \
-  -sdk "$SDK_IPHONEOS" \
-  -parse-as-library \
-  -O \
-  -F "$OUT/Mobile.xcframework/ios-arm64" \
-  -framework Mobile \
-  -framework SwiftUI -framework WebKit -framework Security \
-  -Xlinker -rpath -Xlinker /usr/lib/swift \
-  -Xlinker -e -Xlinker _main \
-  $SWIFT_SOURCES \
-  -o "$APP/Points"
+# ---------------------------------------------------------------- 2. Swift
+echo "== 2/6 编译 Swift (SwiftPM, release, ios/arm64) =="
+cp "$ROOT/ios/Package.swift" "$OUT/Package.swift"
+ln -sfn "$ROOT/ios/App/Sources" "$OUT/Sources"
+SWIFT_FLAGS=(
+  -c release
+  --triple "arm64-apple-ios${MIN_IOS}"
+  -Xswiftc -sdk -Xswiftc "$(xcrun --sdk iphoneos --show-sdk-path)"
+  -Xswiftc -target -Xswiftc "arm64-apple-ios${MIN_IOS}"
+  -Xcc -target -Xcc "arm64-apple-ios${MIN_IOS}"
+)
+( cd "$OUT" && swift build "${SWIFT_FLAGS[@]}" )
+BIN="$(cd "$OUT" && swift build "${SWIFT_FLAGS[@]}" --show-bin-path)/Points"
 
-echo "== 3/6 拷静态库与 Swift 运行时 =="
-cp "$OUT/Mobile.xcframework/ios-arm64/Mobile.framework/Mobile" "$OUT/libMobile.a" 2>/dev/null || true
-# gomobile 的静态切片在 ios-arm64/ 下，直接并入主二进制（静态链接已在上一步完成）
-
-SWIFT_LIB="$APP/Frameworks"
-mkdir -p "$SWIFT_LIB"
-if [ -d "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos" ]; then
-  for f in libswiftCore.dylib libswift_Concurrency.dylib libswift_StringProcessing.dylib; do
-    src="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos/$f"
-    [ -f "$src" ] && cp "$src" "$SWIFT_LIB/" || true
-  done
-fi
-
-echo "== 4/6 安装 Info.plist 与图标 =="
+echo "== 3/6 组装 .app =="
+cp "$BIN" "$APP/Points"
+strip -x "$APP/Points" 2>/dev/null || true
 cp "$ROOT/ios/App/Info.plist" "$APP/Info.plist"
-if [ -d "$ROOT/ios/App/Assets.xcassets" ]; then
-  xcrun actool "$ROOT/ios/App/Assets.xcassets" \
-    --compile "$APP" \
-    --platform iphoneos \
-    --minimum-deployment-target "$MIN_IOS" \
-    --app-icon AppIcon \
-    --output-partial-info-plist "$OUT/assetcatalog.plist" >/dev/null || true
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Info.plist" 2>/dev/null || true
+
+echo "== 4/6 生成图标 =="
+ICON="$ROOT/assets/app-icon-512.png"
+if [ -f "$ICON" ]; then
+  ASSETS="$OUT/Assets.xcassets"
+  rm -rf "$ASSETS"
+  mkdir -p "$ASSETS/AppIcon.appiconset"
+  # actool 的 1024 槽位要 1024x1024，用 sips 放大（矢量图标放大无损观感）
+  sips -z 1024 1024 "$ICON" --out "$ASSETS/AppIcon.appiconset/icon-1024.png" >/dev/null 2>&1 \
+    || cp "$ICON" "$ASSETS/AppIcon.appiconset/icon-1024.png"
+  cat > "$ASSETS/AppIcon.appiconset/Contents.json" <<'JSON'
+{"images":[{"filename":"icon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],
+ "info":{"author":"xcode","version":1}}
+JSON
+  echo '{"info":{"author":"xcode","version":1}}' > "$ASSETS/Contents.json"
+  xcrun actool "$ASSETS" --compile "$APP" --platform iphoneos \
+    --minimum-deployment-target "$MIN_IOS" --app-icon AppIcon \
+    --output-partial-info-plist "$OUT/assetcatalog.plist" >/dev/null 2>&1 \
+    || echo "  (actool 未产出 Assets.car，回退平铺图标)"
+  # 平铺图标兜底：老式 CFBundleIconFiles 也能被 SpringBoard 识别
+  for s in 60 120 180 1024; do
+    sips -z $s $s "$ASSETS/AppIcon.appiconset/icon-1024.png" \
+      --out "$APP/AppIcon${s}.png" >/dev/null 2>&1 || true
+  done
+else
+  echo "  跳过：缺少 assets/app-icon-512.png"
 fi
 
-echo "== 5/6 签名（ad-hoc，仅用于本机自签）=="
+echo "== 5/6 签名（ad-hoc）=="
 # 自签流程：这里先做 ad-hoc 签名让 .app 结构合法；真正装入设备时由
 # SideStore / AltStore / Sideloadly 用你的开发者证书重签。
-codesign --force --sign - --timestamp=none "$APP" || true
+if command -v ldid >/dev/null 2>&1; then
+  cat > "$OUT/entitlements.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>application-identifier</key><string>co.repo.points</string>
+  <key>com.apple.developer.team-identifier</key><string>LOCAL</string>
+  <key>get-task-allow</key><true/>
+</dict></plist>
+PLIST
+  ldid -S"$OUT/entitlements.plist" "$APP/Points"
+else
+  codesign --force --sign - --timestamp=none "$APP" || true
+fi
 
 echo "== 6/6 打包 .ipa =="
-rm -rf "$OUT/Payload" && mkdir -p "$OUT/Payload"
+mkdir -p "$OUT/Payload"
 cp -R "$APP" "$OUT/Payload/"
 ( cd "$OUT" && rm -f Points.ipa && zip -qry Points.ipa Payload )
 
@@ -86,4 +116,4 @@ echo
 echo "完成:"
 echo "  APP: $APP"
 echo "  IPA: $OUT/Points.ipa"
-du -sh "$OUT/Points.ipa" 2>/dev/null || true
+ls -lh "$OUT/Points.ipa" 2>/dev/null || true

@@ -1,30 +1,41 @@
 name: build-ios
 
-# 公开仓库下 macOS runner 也免费，不受额度限制（私有仓库才是 $0.062/分钟）。
-# 但 iOS 构建耗时约 6-10 分钟且改动集中在 core/ 也会触发，所以仍然只做手动触发 +
-# 路径变更自动触发，避免每次改 README 都跑一遍。
+# 公开仓库下 macOS runner 免费（私有仓库才是 $0.062/分钟，且受账号额度限制）。
+#
+# 关于 runner 被秒取消：macos-14 镜像已进入弃用周期，部分账号/仓库会直接
+# 拿不到 runner（表现为 runner_name 为空、0 个 step、started==completed）。
+# 这里用 macos-latest（当前指向 macOS 15 镜像），避开已停止分配的老标签。
 on:
   workflow_dispatch:
     inputs:
       make_ipa:
-        description: '同时打包自签 IPA'
+        description: '打包自签 IPA（关闭则只验证编译）'
         type: boolean
         default: true
   push:
     branches: [main]
-    paths: ['ios/**', 'core/mobile/**', 'core/provider/**']
+    paths: ['ios/**', 'core/mobile/**', 'core/provider/**', '.github/workflows/build-ios.yml']
 
 jobs:
   build:
-    runs-on: macos-14
-    timeout-minutes: 25
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.24'
           cache-dependency-path: core/go.sum
+
+      - name: 工具链自检
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          swift --version
+          go version
 
       - name: Go 单元测试
         working-directory: core
@@ -32,32 +43,54 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: 安装 Xcode 命令行工具链校验
+      - name: 准备 gomobile（GOPATH 模式）
+        # 同 Android：x/mobile 放进 GOPATH/src + GO111MODULE=off，
+        # 避免 x/mobile 的 go>=1.24 要求抬高引擎的 go.mod。
+        # 不能在 /tmp 里 go mod init（系统临时目录下的 go.mod 被 Go 忽略）。
         run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          set -euo pipefail
+          GP="$(go env GOPATH)"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+
+          TMPMOD="$(mktemp -d)"
+          ( cd "$TMPMOD" && go mod init tmp && go get golang.org/x/mobile/bind@latest >/dev/null )
+          MODVER="$(cd "$TMPMOD" && go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          SRC="$(go env GOMODCACHE)/golang.org/x/mobile@${MODVER}"
+          mkdir -p "$GP/src/golang.org/x"
+          rm -rf "$GP/src/golang.org/x/mobile"
+          cp -r "$SRC" "$GP/src/golang.org/x/mobile"
+          chmod -R u+w "$GP/src/golang.org/x/mobile"
+          rm -f "$GP/src/golang.org/x/mobile/go.mod" "$GP/src/golang.org/x/mobile/go.sum"
+          GO111MODULE=off gomobile init
+          echo "$GP/bin" >> "$GITHUB_PATH"
+
+      - name: 仅验证编译（不打包）
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.make_ipa }}
+        run: |
+          cd core && gomobile bind -target=ios -iosversion=15.0 -o /tmp/Mobile.xcframework ./mobile
+          ls -la /tmp/Mobile.xcframework
 
       - name: 构建 xcframework + .app + .ipa
         if: ${{ github.event_name == 'push' || inputs.make_ipa }}
         run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
           bash ios/build-ipa.sh
+          # IPA 没打出来就让这一步失败，避免 upload-artifact 报一个看不懂的
+          # "no files found" 把真正的编译错误盖住
+          test -s ios/build/Points.ipa
 
-      - name: 仅验证 gomobile bind（不打包，省时间）
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.make_ipa }}
+      - name: 产物信息
+        if: ${{ github.event_name == 'push' || inputs.make_ipa }}
         run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          gomobile init
-          cd core && gomobile bind -target=ios -iosversion=15.0 -o /tmp/Mobile.xcframework ./mobile
-          ls -la /tmp/Mobile.xcframework
+          ls -lh ios/build/Points.ipa
+          unzip -l ios/build/Points.ipa | head -20
+          shasum -a 256 ios/build/Points.ipa
 
       - uses: actions/upload-artifact@v4
         if: ${{ github.event_name == 'push' || inputs.make_ipa }}
         with:
           name: points-ipa
           path: ios/build/Points.ipa
-          # 保留 1 天：自签 IPA 你自己下载下来就装了，不需要长期占存储额度
-          retention-days: 1
+          # 自签 IPA 下载即用，不需要长期占存储额度
+          retention-days: 7
           if-no-files-found: error

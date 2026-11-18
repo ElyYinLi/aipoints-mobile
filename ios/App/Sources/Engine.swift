@@ -26,6 +26,9 @@ final class Engine: ObservableObject {
         guard !started else { return }
         started = true
 
+        // 后台任务必须早于 didFinishLaunching 结束前注册
+        BackgroundRefresh.register()
+
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("engine", isDirectory: true)
@@ -63,8 +66,12 @@ final class Engine: ObservableObject {
     func summaryJSON() -> String { MobileSummary() ?? "{}" }
 
     /// 写入账号：secret 先落 Keychain，只把脱敏 JSON 交给引擎。
+    ///
+    /// account_id 用「平台 + cookie 的稳定摘要」而不是 hashValue：
+    /// Swift 的 hashValue 每次进程启动都会变（带随机种子），拿它当主键会导致
+    /// 同一个账号每次启动都生成新记录、旧记录永远读不回 cookie。
     func addAccount(provider: String, cookie: String, label: String) -> Bool {
-        let accountID = provider + "-" + String(UInt64(bitPattern: Int64(cookie.hashValue)), radix: 16)
+        let accountID = provider + "-" + Self.stableID(cookie)
         let payload: [String: String] = [
             "provider": provider,
             "account_id": accountID,
@@ -77,6 +84,27 @@ final class Engine: ObservableObject {
         Keychain.save(key: "secret:" + accountID, value: json)
         let r = MobileAddAccount(json) ?? ""
         return r.contains("\"ok\":true")
+    }
+
+    /// FNV-1a 64 位摘要：跨进程稳定，不需要引第三方哈希库。
+    private static func stableID(_ s: String) -> String {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        for b in s.utf8 {
+            h ^= UInt64(b)
+            h = h &* 0x0000_0100_0000_01b3
+        }
+        return String(h, radix: 16)
+    }
+
+    /// 删除账号：引擎侧删记录，Keychain 同步清掉，避免残留凭据。
+    @discardableResult
+    func deleteAccount(provider: String, account: String) -> Bool {
+        let r = MobileDeleteAccount(provider, account) ?? ""
+        if r.contains("\"ok\":true") {
+            Keychain.delete(key: "secret:" + account)
+            return true
+        }
+        return false
     }
 
     func checkin(provider: String, account: String) -> String {
