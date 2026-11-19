@@ -31,7 +31,7 @@ import (
 )
 
 // Version 由壳层显示，构建时可通过 -ldflags 注入。
-var Version = "0.5.1"
+var Version = "0.5.2"
 
 type engine struct {
 	mu     sync.Mutex
@@ -66,6 +66,9 @@ func Start(dataDir string) string {
 				Reg:      reg,
 				LoginURL: loginURL,
 				Version:  Version,
+				// 与 accounts.json 同级：gain memo 要跨启动保留，
+				// 否则每次开 App 都回到「今日已签」但没有 +N
+				DataDir: filepath.Join(dataDir, "core"),
 			})
 			if err := p.Start(); err == nil {
 				e.panel = p

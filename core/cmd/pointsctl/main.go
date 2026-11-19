@@ -57,7 +57,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "初始化存储失败:", err)
 			os.Exit(1)
 		}
-		srv := panel.New(panel.Options{Addr: *addr, Store: st, Reg: reg})
+		srv := panel.New(panel.Options{Addr: *addr, Store: st, Reg: reg, DataDir: *dataDir})
 		if err := srv.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

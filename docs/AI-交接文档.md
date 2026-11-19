@@ -2,7 +2,7 @@
 
 > 给下一个接手这个项目的 AI（或人）看的。目标：读完这一份就能独立继续开发，不用重新逆向、不用再踩已踩过的坑。
 >
-> 最后更新：2026-11-19 · 对应版本 **0.5.1 (versionCode 10)**
+> 最后更新：2026-11-19 · 对应版本 **0.5.2 (versionCode 11)**
 
 ---
 
@@ -195,7 +195,33 @@ type Result struct {
 - 报 `Signal: SIGTERM`
 - 修法：`pgrep -f "精确模式" | while read p; do kill -9 $p; done`，或启动时用 `setsid` 并记录 PID
 
-### 3.14 Go 版本
+### 3.14 Android WebView 的 `prefers-color-scheme` 不可靠
+
+- **现象**：用户选「跟随系统」，系统明明是浅色，App 却是深色（或反之）
+- **根因**：Android WebView 对 `prefers-color-scheme` 媒体查询的实现不一致，部分机型恒为 light / 恒为 dark
+- **修法**：`applyTheme()` 在 system 模式下用 JS 的 `matchMedia` 主动算出明暗，**显式**写 `data-theme="dark"/"light"`，不依赖 CSS 媒体查询。CSS 里的 `@media` 只作为 JS 未执行时的兜底（选择器改为 `:root:not([data-theme])`）
+- **配套**：初始化时监听 `matchMedia('(prefers-color-scheme: dark)')` 的 `change` 事件，用户切系统主题时立刻跟上；监听回调里**不能**写 localStorage
+
+### 3.15 「今日已签 +N 积分」拿不到 N
+
+- **现象**：状态行只显示「今日已签」，没有数字；或 WorkBuddy 显示「+100」但缺「积分」
+- **三个原因叠在一起**：
+  1. 各家 provider 自己拼字符串，口径不一致（有的带单位有的不带）
+  2. 平台接口不一定回今日积分字段
+  3. 早上打开网页时积分已自动发放，我们连 POST 都没发过，拿不到增量
+- **修法**（三层）：
+  - 文案**只在** 前端 `detailText()` 生成，provider 只给 `today_gain` 数值 + `unit`
+  - 签到成功时用「前后总额差值」算出实得，`panel/gain_memo.go` 记到本地
+  - 查询时若平台没给、memo 有值就补上，并**顺带把状态纠正为已签**（WorkBuddy 签完了状态接口仍回 false）
+- **memo 细节**：带日期，跨天自动失效；`gain<=0` 视为清空；落盘到 `{DataDir}/gain_memo.json`
+
+### 3.16 合计区「单位不同所以不合计」这段说明
+
+- 用户明确反馈「没什么用又浪费空间」，**已整块删除**（连同 `.total-note` 节点与样式）
+- 现在单位不一致时：`hero-head`（「全部账号合计 + 数值 + 单位」）整块 `display:none`，统计条保留
+- 注意：判断单位是否一致前必须**归一化**（`unit || '积分'`），否则 `undefined` 会被当成新单位，把本来一致的合计误判成不可合计
+
+### 3.17 Go 版本
 
 - `t.Context()` 需要 Go 1.24+；本项目测试里用 `context.Background()` 更稳
 
@@ -447,4 +473,5 @@ python3 tools/check_secrets.py
 | 0.4.x | 打通 Android 零 Gradle 构建链、AiPy 一键领任务、iOS 前台恢复 reload |
 | 0.4.2 | 一键签到合并领任务+抽奖、主题切换、状态栏沉浸、备份文件导入导出 |
 | 0.5.0 | 改名**积分矩阵**、抽奖可视化入口、账号拖拽排序、卡片/紧凑双视图、README 重写、加 `v0.5.0` tag |
-| **0.5.1** | **修 410110（UUID）、签到 +N 回执（差值反推）、提示统一带单位、设置页运行日志** |
+| 0.5.1 | 修 410110（UUID）、签到 +N 回执（差值反推）、提示统一带单位、设置页运行日志 |
+| **0.5.2** | **状态行统一「今日已签 +N 积分」（gain memo 兜底）、删掉合计区解释文案、system 主题改 JS 判定修 Android WebView 不跟随** |

@@ -133,12 +133,14 @@ func (w *WorkBuddy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 		snap.Balance = v
 		snap.BalanceText = fmtNum(v)
 	}
+	// 今日可得/已得积分只填数值，文案统一由面板的 detailText() 拼成
+	// 「今日已签 +100 积分」。此前各 provider 自己拼字符串，百度搭子那边漏了单位、
+	// WorkBuddy 这边也只剩「+100」——同一件事两处不一致就是这么来的。
 	if snap.CheckedIn {
 		if v, ok := httpx.Num(digAny(m, "today_credit", "daily_credit")); ok && v > 0 {
-			snap.Detail = "今日已签 · +" + fmtNum(v)
-		} else {
-			snap.Detail = "今日已签到"
+			snap.TodayGain = v
 		}
+		snap.Detail = "今日已签"
 	} else {
 		snap.Detail = "今日未签到"
 	}

@@ -37,8 +37,11 @@ const indexTmpl = `<!DOCTYPE html>
   --hair:rgba(128,128,150,.16);
   --sat:env(safe-area-inset-top); --sab:env(safe-area-inset-bottom);
 }
+/* 只在「没有任何 data-theme 属性」时才靠媒体查询兜底（JS 未执行/被禁用）。
+   JS 正常运行时 system 模式会显式写 data-theme="dark"，走下面那条规则——
+   因为 Android WebView 的 prefers-color-scheme 不可靠，不能只依赖它。 */
 @media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
+  :root:not([data-theme]){
     --primary:#BAC3FF; --on-primary:#1B2270;
     --primary-c:#343D8C; --on-primary-c:#DEE0FF;
     --surface:#141218; --surface-1:#1D1B22; --surface-2:#232128; --surface-3:#2B2833;
@@ -107,6 +110,11 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
 /* ---------- 汇总卡 ---------- */
 .hero{padding:14px 18px 6px}
+/* 合计区的「全部账号合计 + 大字 + 单位」三件套整体可隐藏：
+   单位不一致时这个数没有意义，留着只是占掉半屏。
+   统计条（chips-row）不属于合计，要始终显示，所以不放进这个容器。 */
+.hero-head{padding:0}
+.hero-head.off{display:none}
 .hero .kicker{font-size:12.5px;color:var(--on-surface-v);letter-spacing:.02em;margin-bottom:2px}
 .total{
   display:flex;align-items:baseline;gap:8px;
@@ -120,22 +128,13 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   background:linear-gradient(120deg,var(--primary),#8B4DFF 90%);
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
 }
-/* 占位说明已改为整行隐藏 + 一句解释（见 total-note），
+/* 占位（破折号）已改为整行隐藏（见 .total.off）。
    这里保留最小化样式，避免残留的 .dash 元素被渐变裁成一根横条。 */
 .total .num.dash{
   background:none!important;-webkit-text-fill-color:var(--on-surface-v)!important;
   color:var(--on-surface-v);font-size:15px;font-weight:600;
 }
 .total .unit{font-size:14px;color:var(--on-surface-v);font-weight:500}
-/* 混合单位时的解释性说明：一行小字，说明为什么没有总数。
-   有总数时这行隐藏、大字显示；没有总数时反过来——大字整行隐藏，
-   只留这句说明，避免屏幕上出现一根孤零零的粗横条。 */
-.total-note{
-  font-size:13px;color:var(--on-surface-v);margin-top:2px;line-height:1.55;
-  display:flex;align-items:flex-start;gap:7px;
-}
-.total-note b{color:var(--on-surface);font-weight:640}
-.total-note svg{width:15px;height:15px;flex:0 0 auto;margin-top:2px;opacity:.8}
 .chips-row{display:flex;align-items:center;gap:8px;margin-top:12px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
 /* 视图密度切换：放在「N 个正常 / N 个已签」右侧 */
@@ -185,6 +184,8 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .c-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;
   padding-top:10px;border-top:1px solid var(--outline-v)}
 .status{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--on-surface-v);min-width:0}
+/* 状态文案现在带「+N 单位」，比原来长，给按钮组留出固定宽度后允许省略 */
+.status{flex:1}
 .status .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
 .status.ok{color:var(--ok)}.status.bad{color:var(--bad)}
 .status svg{width:15px;height:15px}
@@ -518,12 +519,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 </div>
 
 <div class="hero">
-  <div class="kicker">全部账号合计</div>
-  <div class="total" id="total-row"><span class="num" id="total">—</span><span class="unit" id="total-unit">积分</span></div>
-  <!-- 没有总数时（无账号 / 全部异常 / 单位不同）不画破折号：
-       28px 的「—」在手机上就是一根横条，看着像分隔线或渲染错误。
-       改为直接给一句话，把「为什么没有总数」讲明白。 -->
-  <div class="total-note" id="total-note" hidden></div>
+  <div class="hero-head" id="hero-head">
+    <div class="kicker">全部账号合计</div>
+    <div class="total" id="total-row"><span class="num" id="total">—</span><span class="unit" id="total-unit">积分</span></div>
+  </div>
+  <!-- 没有总数时（无账号 / 全部异常 / 单位不同）整行大字隐藏。
+       以前这里会补一句「单位不同所以不合计」，用户明确说没用又占地方，已删除。 -->
   <div class="chips-row">
     <div class="chips" id="chips"></div>
     <button class="viewbtn" id="btnView" aria-label="切换显示密度">{{ICON:list}}</button>
@@ -857,11 +858,24 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     } catch (e) { return false; }
   }
   // 把主题写进 DOM，并同步状态栏颜色给壳层
+  //
+  // 关键改动（0.5.2）：system 不再靠 CSS 的 @media (prefers-color-scheme) 判定，
+  // 而是在 JS 里算出明暗后显式写 data-theme="dark"/"light"。
+  // 原因：Android WebView 的 prefers-color-scheme 常年不可靠——
+  //   部分机型恒为 light、部分恒为 dark（系统明明切了也不跟），
+  //   表现就是用户说的「跟随系统默认是深色，并没有跟随」。
+  // JS 侧 matchMedia 是同一套数据源，但由我们主动读、主动监听、主动落属性，
+  // 不依赖 WebView 内部对媒体查询的实现，两端行为一致。
   function applyTheme(theme){
     var t = theme || readTheme();
     var root = document.documentElement;
-    if (t === 'system') root.removeAttribute('data-theme');
-    else root.setAttribute('data-theme', t);
+    if (t === 'system'){
+      // 交给系统：先移除手写属性，再看系统当前偏好显式落一次
+      root.removeAttribute('data-theme');
+      root.setAttribute('data-theme', effectiveDark() ? 'dark' : 'light');
+    } else {
+      root.setAttribute('data-theme', t);
+    }
     // color-scheme 决定 WebView 里滚动条/表单控件的明暗
     root.style.colorScheme = (t === 'system') ? 'light dark' : t;
     syncStatusBar();
@@ -1084,9 +1098,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var st = document.createElement('div');
     st.className = 'status ' + (r.error ? 'bad' : (r.checked_in ? 'ok' : ''));
     var stTxt = document.createElement('span'); stTxt.className = 'txt';
-    if (r.error) stTxt.textContent = r.error;
-    else if (r.detail) stTxt.textContent = r.detail;
-    else stTxt.textContent = r.checked_in ? '今天已签到' : '今天还没签';
+    stTxt.textContent = detailText(r);
     st.appendChild(stTxt);
 
     // 右侧按钮组：任务 / 抽奖（仅支持平台）+ 签到
@@ -1138,9 +1150,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var t = document.createElement('div'); t.className = 't';
     t.textContent = (r.provider_name || r.provider || '') + ' · ' + (r.label || r.account_id || '');
     var d = document.createElement('div'); d.className = 'd' + (r.error ? ' bad' : '');
-    if (r.error) d.textContent = r.error;
-    else if (r.detail) d.textContent = r.detail;
-    else d.textContent = r.checked_in ? '今天已签到' : '今天还没签';
+    d.textContent = detailText(r);
     main.appendChild(t); main.appendChild(d);
     row.appendChild(main);
 
@@ -1179,7 +1189,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       if (!rows[i].error){
         total += Number(rows[i].balance) || 0;
         healthy++;
-        // 各家单位不同（积分 / 点数）时不能相加，改用中性文案
+        // 各家单位不同（积分 / 灵石 / 智点）时不能相加。
+        // 注意：unit 缺省即「积分」（provider 约定空字符串 = 积分），
+        // 所以这里必须先归一化再比较，否则 WorkBuddy 的 undefined 会被当成
+        // 一个「新单位」，反而把本来一致的合计判成不可合计。
         var u = rows[i].unit || '积分';
         if (unit && unit !== u) unit = '合计'; else unit = u;
       }
@@ -1187,39 +1200,23 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     // 全异常或没有账号时显示「—」而不是 0：0 会被误读成「余额为零」。
     var mixed = (unit === '合计');
     var tn = $('total');
+    // 混合单位时整块合计隐藏：这个数没有意义，说明文字也已按用户要求删掉。
     var showDash = (!rows.length || !healthy || mixed);
-    // 没有总数时整行大字都藏起来，只用下面那句说明，避免出现一根粗横条
+    // 没有总数时把「全部账号合计 + 数值 + 单位」整块隐藏。
+    // 单藏数字会留下一个孤零零的「全部账号合计」标题，更费解。
+    var head = $('hero-head');
+    if (head) head.className = 'hero-head' + (showDash ? ' off' : '');
     var row = $('total-row');
-    if (row) row.className = 'total' + (showDash ? ' off' : '');
+    if (row) row.className = 'total';
     if (!showDash){
       tn.textContent = fmt(total);
       tn.className = 'num';
     }
     var tu = $('total-unit');
     if (tu) tu.textContent = showDash ? '' : (unit || '积分');
-    // 没有总数时给一句能看懂的解释（用户反馈过「不合计」三个字看不懂）
-    var note = $('total-note');
-    if (note){
-      if (!showDash){
-        note.hidden = true;
-        note.textContent = '';
-      } else {
-        note.hidden = false;
-        var msg;
-        if (!rows.length){
-          msg = '还没有账号，添加后这里会显示 <b>各平台积分的合计</b>。';
-        } else if (mixed){
-          var units = {};
-          for (var q = 0; q < rows.length; q++){ if (!rows[q].error) units[rows[q].unit || '积分'] = 1; }
-          var names = Object.keys(units);
-          msg = '各账号的单位不同（<b>' + esc(names.join(' / ')) + '</b>），'
-              + '加起来没有意义，因此不显示总数。每个账号的具体数值见下方列表。';
-        } else {
-          msg = '所有账号都没读到数据，暂时无法合计。下拉可重试。';
-        }
-        note.innerHTML = ICON('warn') + '<span>' + msg + '</span>';
-      }
-    }
+    // 没有总数时不写任何解释文案：用户反馈「单位不同所以不合计」那段
+    // 既占地方又没用——数字本来就在下面每张卡上，一眼就能看到。
+    // 单位混在一起时整块合计区直接隐藏，把空间还给账号列表。
     renderChips(rows);
 
     if (!rows.length){
@@ -1294,6 +1291,24 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       // 自动签到则靠这个标志决定是否整页 reload 兜底。
       return false;
     });
+  }
+
+  // 状态行的统一文案：已签时必须带「+N 单位」。
+  //
+  // 用户反复反馈过两次：百度搭子只写「今日已签到」没有积分，WorkBuddy 写了
+  // 「+100」但缺「积分」二字。根因是各家 provider 自己拼字符串，口径不一致。
+  // 现在 provider 只给 today_gain 数值，文案统一在这里生成，谁也不会漏单位。
+  function detailText(r){
+    if (!r) return '';
+    var unit = r.unit || '积分';
+    if (r.error) return r.error;
+    if (r.checked_in){
+      if (r.today_gain > 0) return '今日已签 +' + fmt(r.today_gain) + ' ' + unit;
+      return '今日已签';
+    }
+    // 未签到但平台给了今日可得积分时，也顺手告诉用户能拿多少
+    if (r.today_gain > 0) return '今日未签 · 可得 +' + fmt(r.today_gain) + ' ' + unit;
+    return r.detail || '今日未签';
   }
 
   // 统一的「，+N 单位」文案。所有奖励提示都必须走这里——
@@ -2227,6 +2242,19 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   /* ---------- 启动 ---------- */
   // 主题要在首屏渲染前就定好，否则暗色用户会先看到一帧白底再翻黑。
   applyTheme(readTheme());
+  // 系统主题变了要立刻跟上（用户在「跟随系统」下切了深色/浅色开关）。
+  // 只监听不写 localStorage：这是系统事件，不该覆盖用户的选择。
+  try {
+    var mqDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+    if (mqDark){
+      var onSchemeChange = function(){
+        if (readTheme() !== 'system') return;   // 用户手动选了浅/深，不打扰
+        applyTheme('system');
+      };
+      if (mqDark.addEventListener) mqDark.addEventListener('change', onSchemeChange);
+      else if (mqDark.addListener) mqDark.addListener(onSchemeChange);  // 老 WebView
+    }
+  } catch (e) {}
   // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
   applyView(readView());
   showSkeleton();

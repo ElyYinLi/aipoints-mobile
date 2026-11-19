@@ -114,8 +114,10 @@ func (d *Dumate) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	// 打开网页就已自动发放**（hasIssued 变 true），我们点「签到」只是补一次 POST 确认。
 	// 所以早上看到已签是真实状态——用户当天只要打开过一次搭子网页，机会就已经用掉了。
 	snap.CheckedIn = boolOf(digAny(m, "hasIssued", "has_issued", "signed_today", "claimed", "is_signed", "received"))
+	// Detail 只给状态，不带数字：文案由面板 detailText() 统一拼成
+	// 「今日已签 +500 积分」，各家保证同一口径。
 	if snap.CheckedIn {
-		snap.Detail = "今日已签到"
+		snap.Detail = "今日已签"
 	} else {
 		snap.Detail = "今日未签到"
 	}

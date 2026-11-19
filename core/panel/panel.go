@@ -32,6 +32,8 @@ type Options struct {
 	LoginURL func(providerID string) string
 	// Version 由壳层注入，设置页显示，方便确认装的是哪一版。
 	Version string
+	// DataDir 是持久化目录（与账号库同级）。为空则不落盘，gain memo 只在内存里。
+	DataDir string
 }
 
 // Server 是面板实例。
@@ -42,6 +44,9 @@ type Server struct {
 	// key 是平台 id，value 是服务端签发的一次性 state。
 	oauthMu sync.Mutex
 	oauth   map[string]oauthPending
+	// gains 记住每个账号「今天签到拿了多少」，用于状态行显示「今日已签 +N 积分」。
+	// 平台接口不一定回这个数，所以本地兜一层；跨天自动失效。
+	gains *gainMemo
 }
 
 // New 构造面板。
@@ -53,6 +58,9 @@ func New(opt Options) *Server {
 		opt.Reg = provider.NewRegistry(httpx.New())
 	}
 	s := &Server{opt: opt, oauth: make(map[string]oauthPending)}
+	if opt.DataDir != "" {
+		s.gains = newGainMemo(opt.DataDir)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/providers", s.handleProviders)
@@ -255,6 +263,34 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}(i, p, cred, a.Label)
 	}
 	wg.Wait()
+	// 兜底：平台没给 today_gain 时用本地记住的值补上，
+	// 否则状态行只能显示「今日已签」，看不到拿了多少。
+	//
+	// 这里**不要求** CheckedIn 为真：部分平台（WorkBuddy 实测）签完之后状态接口
+	// 仍回 checked_in=false，但我们已经拿到并记下了本次收益。既然今天确实领到过，
+	// 就该显示「今日已签 +100 积分」——否则用户看到的是「签到成功」toast 配
+	// 「今日未签到」状态行，前后矛盾。
+	for i := range out {
+		if out[i].Error != "" {
+			continue
+		}
+		// 平台直接给了今日积分 → 顺手记下来，明天这个账号就算状态接口不回数也有值
+		if out[i].TodayGain > 0 && out[i].CheckedIn {
+			s.gains.Set(out[i].Provider, out[i].AccountID, out[i].TodayGain)
+			continue
+		}
+		if out[i].TodayGain > 0 {
+			continue
+		}
+		if g := s.gains.Get(out[i].Provider, out[i].AccountID); g > 0 {
+			out[i].TodayGain = g
+			// 有今日收益即说明今天已经领过，顺带纠正状态
+			out[i].CheckedIn = true
+			if out[i].Detail == "" || out[i].Detail == "今日未签到" {
+				out[i].Detail = "今日已签"
+			}
+		}
+	}
 	writeJSON(w, out)
 }
 
@@ -294,6 +330,11 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 		if res.Provider == "" {
 			res.Provider = a.Provider
+		}
+		// 签到成功（含「已签」但明确了收益）时记住今天拿了多少，
+		// 后续每次查询都能把这句「今日已签 +N 积分」补全。
+		if res.OK && res.Gain > 0 {
+			s.gains.Set(res.Provider, res.AccountID, res.Gain)
 		}
 		out = append(out, res)
 		// 只有真的发过写请求才需要间隔（防同设备批量写触发风控）。
