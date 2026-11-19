@@ -139,11 +139,13 @@ func (a *AiPy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	case frozen:
 		snap.Detail = "签到已冻结，需到官网处理"
 	case snap.CheckedIn:
+		// 已签：收益只填数值，文案由面板 detailText() 统一拼成
+		// 「今日已签 +N 灵石」。之前这里自己拼了「今日已签 · +N 灵石」，
+		// 面板又只认 today_gain 字段 → 永远走到「今日已签」分支，+N 被吞掉。
 		if todayReward > 0 {
-			snap.Detail = "今日已签 · +" + fmtNum(todayReward/aipyQuotaPerStone) + " 灵石"
-		} else {
-			snap.Detail = "今日已签到"
+			snap.TodayGain = todayReward / aipyQuotaPerStone
 		}
+		snap.Detail = "今日已签"
 	case !canSign:
 		snap.Detail = "今日暂不可签（" + aipyBlockReason(data) + "）"
 	case todayReward > 0:

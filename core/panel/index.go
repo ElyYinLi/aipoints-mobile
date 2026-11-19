@@ -848,14 +848,30 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     try { v = localStorage.getItem(THEME_KEY) || ''; } catch (e) {}
     return THEMES.indexOf(v) >= 0 ? v : 'system';
   }
+  // 系统当前是不是深色。
+  //
+  // 实测坑（0.5.3）：Android WebView 里 prefers-color-scheme 这个**媒体查询**
+  // 常常失灵（内核版本老/被 ROM 改过），但 matchMedia(...).matches 走的是同一个
+  // 查询对象，很多机器上同样是错的——于是「跟随系统」永远落在浅色。
+  // 所以三路依次尝试，谁先给出确定答案用谁：
+  //   1) 壳层注入的 window.__pointsSystemDark（Android 用 Configuration.uiMode 算的真值）
+  //   2) matchMedia
+  //   3) 兜底浅色
+  function systemDark(){
+    try {
+      if (window.__pointsSystemDark === 1) return true;
+      if (window.__pointsSystemDark === 0) return false;
+    } catch (e) {}
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches);
+    } catch (e) { return false; }
+  }
   // 当前实际生效的是浅还是深（system 时看系统偏好）
   function effectiveDark(){
     var t = readTheme();
     if (t === 'dark') return true;
     if (t === 'light') return false;
-    try {
-      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches);
-    } catch (e) { return false; }
+    return systemDark();
   }
   // 把主题写进 DOM，并同步状态栏颜色给壳层
   //
@@ -866,19 +882,22 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   //   表现就是用户说的「跟随系统默认是深色，并没有跟随」。
   // JS 侧 matchMedia 是同一套数据源，但由我们主动读、主动监听、主动落属性，
   // 不依赖 WebView 内部对媒体查询的实现，两端行为一致。
-  function applyTheme(theme){
+  // applyTheme：t 是「用户选择」（system/light/dark）。
+  // 可选的 darkOverride：system 模式下已知系统明暗时直接用它，
+  // 避免刚被壳层推了真值又回头去问那个不可靠的 matchMedia。
+  function applyTheme(theme, darkOverride){
     var t = theme || readTheme();
     var root = document.documentElement;
+    var dark = (typeof darkOverride === 'boolean') ? darkOverride : effectiveDark();
     if (t === 'system'){
-      // 交给系统：先移除手写属性，再看系统当前偏好显式落一次
       root.removeAttribute('data-theme');
-      root.setAttribute('data-theme', effectiveDark() ? 'dark' : 'light');
+      root.setAttribute('data-theme', dark ? 'dark' : 'light');
     } else {
       root.setAttribute('data-theme', t);
     }
     // color-scheme 决定 WebView 里滚动条/表单控件的明暗
     root.style.colorScheme = (t === 'system') ? 'light dark' : t;
-    syncStatusBar();
+    syncStatusBar(dark);
     var btn = $('btnTheme');
     if (btn){
       btn.innerHTML = ICON(t === 'dark' ? 'moon' : (t === 'light' ? 'sun' : 'auto'));
@@ -886,10 +905,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       btn.title = '主题：' + THEME_LABEL[t];
     }
   }
+  // 兼容别名：外部调用点只关心「按某个主题重绘一次」
+  function applyThemeFor(t, dark){ applyTheme(t, dark); }
   // syncStatusBar：状态栏/导航栏要跟页面背景同色，才不像「贴了一条固定色带」。
   // 我们自己画背景（edge-to-edge），原生侧只需要把图标明暗调对。
-  function syncStatusBar(){
-    var dark = effectiveDark();
+  function syncStatusBar(darkOverride){
+    var dark = (typeof darkOverride === 'boolean') ? darkOverride : effectiveDark();
     var bg = dark ? '#141218' : '#FBF8FF';
     var metas = document.querySelectorAll('meta[name="theme-color"]');
     for (var i = 0; i < metas.length; i++){
@@ -922,6 +943,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     applyTheme(t);
     return t;
   }
+  // 存储被外部改写（壳层注入、多窗口、开发者工具）时，也要立刻按新选择重绘。
+  // 否则 localStorage 已经是 'dark'，页面却还停在旧配色，要等下次系统事件才刷——
+  // 而系统事件又因为「用户已手动选择」被跳过，看起来就是「切了没反应」。
+  window.addEventListener('storage', function(e){
+    if (!e || e.key === THEME_KEY) applyTheme(readTheme());
+  });
 
   /* ---------- 备份文件读写 ----------
      手机上复制一长串 JSON 再粘贴是最难受的一步：选中容易错、键盘一挡就看不见。
@@ -1295,19 +1322,28 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
   // 状态行的统一文案：已签时必须带「+N 单位」。
   //
-  // 用户反复反馈过两次：百度搭子只写「今日已签到」没有积分，WorkBuddy 写了
-  // 「+100」但缺「积分」二字。根因是各家 provider 自己拼字符串，口径不一致。
-  // 现在 provider 只给 today_gain 数值，文案统一在这里生成，谁也不会漏单位。
+  // 用户已经因为这句反馈过三次，最后一次的原话是「aipy 今日已签后面都没有 +100 灵石」
+  // 「百度搭子也没有」。根子有两个：
+  //   1) provider 各自拼字符串（aipy 拼的是「今日已签 · +N 灵石」，但没填 today_gain）；
+  //   2) 这里以前写的是「today_gain > 0 才拼」，provider 没给数就直接只剩「今日已签」。
+  // 现在改成：已签就把「+N 单位」无条件拼上，N 从 today_gain 取；
+  // 平台确实拿不到数时给「+?」占位，绝不再静默吞掉整段——用户要的是「一眼看到有收益」，
+  // 而不是我们替他决定“没数就不显示”。
+  function gainNum(r){
+    var v = Number(r && r.today_gain);
+    return isFinite(v) && v > 0 ? fmt(v) : '';
+  }
   function detailText(r){
     if (!r) return '';
     var unit = r.unit || '积分';
     if (r.error) return r.error;
     if (r.checked_in){
-      if (r.today_gain > 0) return '今日已签 +' + fmt(r.today_gain) + ' ' + unit;
-      return '今日已签';
+      var g = gainNum(r);
+      return '今日已签 +' + (g || '?') + ' ' + unit;
     }
     // 未签到但平台给了今日可得积分时，也顺手告诉用户能拿多少
-    if (r.today_gain > 0) return '今日未签 · 可得 +' + fmt(r.today_gain) + ' ' + unit;
+    var g2 = gainNum(r);
+    if (g2) return '今日未签 · 可得 +' + g2 + ' ' + unit;
     return r.detail || '今日未签';
   }
 
@@ -2255,6 +2291,27 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       else if (mqDark.addListener) mqDark.addListener(onSchemeChange);  // 老 WebView
     }
   } catch (e) {}
+  // 壳层（Android）在系统深/浅色变化时会调这个函数把真值推进来。
+  // 上面那条 matchMedia 在部分 WebView 上压根不触发 change，靠它不可靠。
+  window.__pointsOnSystemTheme = function(dark){
+    try { window.__pointsSystemDark = dark ? 1 : 0; } catch (e) {}
+    // 注意：这里必须用 readTheme() 现读，而且判定的是【用户选择】是否为 system。
+    // 早先的写法有 bug——系统推浅色时 t 已经是 'light'，会被误判成「用户选了浅色」
+    // 而跳过重绘，甚至把手动选的深色覆盖掉。
+    if (readTheme() !== 'system') return;
+    applyThemeFor('system', !!dark);
+  };
+  // 兜底轮询：系统主题切换没有可靠事件（尤其 Android WebView）时，
+  // 每秒读一次真值，变了才重绘。代价极低（一次属性比较），换来「跟随系统真的跟得上」。
+  (function(){
+    var last = null;
+    setInterval(function(){
+      if (readTheme() !== 'system') return;
+      var d = systemDark();
+      if (last === null) { last = d; return; }
+      if (d !== last){ last = d; applyTheme('system'); }
+    }, 1000);
+  })();
   // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
   applyView(readView());
   showSkeleton();

@@ -225,6 +225,45 @@ type Result struct {
 
 - `t.Context()` 需要 Go 1.24+；本项目测试里用 `context.Background()` 更稳
 
+### 3.18 「今日已签」后面没数字（0.5.3 根治，投诉过三次）
+
+这是用户投诉次数最多的一条，前两次都没修对，原因是**两处同时出错**：
+
+1. **provider 层**：`aipy.go` 把「+N 灵石」拼进了 `snap.Detail` 字符串，却**没填 `snap.TodayGain`**。面板只认数值字段 → 永远走「已签」分支，`+N` 被吞掉。
+   - 修法：provider **只给数值**（`snap.TodayGain = todayReward / aipyQuotaPerStone`），`Detail` 只写状态。
+2. **前端层**：`detailText()` 原来是 `if (today_gain > 0) 才拼`。数值缺失就什么都不拼，静默降级成「今日已签」。
+   - 修法：已签就**无条件**拼 `+N 单位`；确实拿不到数时给 `+?` 占位，绝不再吞掉整段。
+
+> 规则沉淀：文案只在 `detailText()` 一处生成；provider 只提供 `today_gain` + `unit`。
+> `panel/index_test.go` 里有字符串断言守着这两条，谁改回去测试立刻红。
+
+### 3.19 主题「跟随系统」不跟随（0.5.3 根治）
+
+Android WebView 上 `@media (prefers-color-scheme: dark)` 和 `matchMedia().matches` 都会失灵（ROM/内核差异），只靠 CSS 媒体查询必然翻车。现在的三层保障：
+
+1. **壳层真值**：`MainActivity` 用 `Configuration.uiMode` 判断系统明暗（这是系统权威值），通过 `window.__pointsOnSystemTheme(dark)` 推给页面；`onConfigurationChanged` 里系统一切换就推。
+   - 前提：`AndroidManifest.xml` 的 `android:configChanges` 必须含 `uiMode`（已有）。
+2. **JS 主动落属性**：`systemDark()` 先读壳层真值，再退 `matchMedia`；`applyTheme()` 显式写 `data-theme="dark"/"light"`，不让 CSS 媒体查询决定结果。
+3. **每秒轮询兜底**：`setInterval` 比对真值变化，变了才重绘。代价极低，换来「切了真的跟得上」。
+
+> 坑中坑：`localStorage.setItem('points_theme', ...)` **不会**同步刷新 `data-theme`。
+> 手动改存储后必须自己调一次 `applyTheme()`，否则「切了没反应」。
+> 已加 `storage` 事件监听兜住外部改写。
+
+### 3.20 验证主题改动的正确姿势
+
+Playwright 里模拟「WebView 媒体查询坏掉」：
+
+```python
+INIT = """const o=window.matchMedia;window.matchMedia=function(q){
+  if(q.indexOf('prefers-color-scheme')>=0)return{matches:false,media:q,
+    addEventListener(){},removeEventListener(){},addListener(){},removeListener(){}};
+  return o.call(window,q)};"""
+```
+
+然后只调 `window.__pointsOnSystemTheme(true/false)`，看 `data-theme` 是否跟着变。
+只测「正常浏览器切 color_scheme」是测不出这个 bug 的——真实机型就是坏的。
+
 ---
 
 ## 4. 各平台实现要点

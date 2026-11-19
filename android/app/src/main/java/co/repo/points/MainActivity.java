@@ -83,8 +83,11 @@ public final class MainActivity extends Activity {
         web.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int p) {
-                if (p == 100) view.evaluateJavascript(
-                        "window.__pointsTheme || ''", value -> applySystemBarTheme(value));
+                if (p == 100) {
+                    pushSystemDark();
+                    view.evaluateJavascript(
+                            "window.__pointsTheme || ''", value -> applySystemBarTheme(value));
+                }
             }
         });
 
@@ -160,6 +163,39 @@ public final class MainActivity extends Activity {
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
             v.setSystemUiVisibility(flags);
         }
+    }
+
+    /**
+     * 系统当前是否深色，用 Configuration.uiMode 这个「权威值」判断。
+     *
+     * 为什么不用 prefers-color-scheme：实测多台机型上 Android WebView 的
+     * 该媒体查询恒为 light（内核版本 / ROM 差异），于是页面「跟随系统」永远浅色，
+     * 用户在系统里切了深色也不跟。uiMode 是系统自己维护的配置，跟着系统设置走，
+     * 没有 WebView 内核的坑。
+     */
+    private boolean isSystemDark() {
+        int mode = getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** 把系统的真实明暗推给页面，供「跟随系统」使用。 */
+    private void pushSystemDark() {
+        if (web == null) return;
+        web.evaluateJavascript(
+                "window.__pointsOnSystemTheme && window.__pointsOnSystemTheme("
+                        + (isSystemDark() ? "true" : "false") + ")", null);
+    }
+
+    /**
+     * 系统深浅色变化时系统会重建/通知 Activity，这里是唯一可靠的回调。
+     * 之前完全没接，页面里 matchMedia 的 change 事件在 WebView 上也常常不触发，
+     * 结果就是「跟随系统」只在冷启动那一次生效。
+     */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration cfg) {
+        super.onConfigurationChanged(cfg);
+        pushSystemDark();
     }
 
     /** 轮询本机面板端口，就绪后加载。最多等 3 秒。 */

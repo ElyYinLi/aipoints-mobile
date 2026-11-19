@@ -54,8 +54,13 @@ func TestAiPyQueryCheckedIn(t *testing.T) {
 	if snap.Unit != "灵石" {
 		t.Fatalf("单位应为灵石，实际 %q", snap.Unit)
 	}
-	if !strings.Contains(snap.Detail, "10 灵石") {
-		t.Fatalf("已签文案应带奖励: %q", snap.Detail)
+	// 今日收益必须以【数值】给出（today_gain），文案由面板 detailText() 统一拼成
+	// 「今日已签 +N 灵石」。之前这里拼进 Detail 字符串，面板只认数值 → +N 丢失。
+	if snap.TodayGain != 10 {
+		t.Fatalf("today_gain 应为 10 灵石，实际 %v（Detail=%q）", snap.TodayGain, snap.Detail)
+	}
+	if snap.Detail != "今日已签" {
+		t.Fatalf("已签状态文案应为「今日已签」，实际 %q", snap.Detail)
 	}
 }
 
