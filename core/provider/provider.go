@@ -51,8 +51,11 @@ type Snapshot struct {
 	Balance     float64 `json:"balance"`
 	BalanceText string  `json:"balance_text,omitempty"`
 	// Unit 是余额单位文案，空表示「积分」（各家默认口径一致时才留空）。
-	Unit      string          `json:"unit,omitempty"`
-	CheckedIn bool            `json:"checked_in"`
+	Unit      string `json:"unit,omitempty"`
+	CheckedIn bool   `json:"checked_in"`
+	// TodayGain 是「今天签到能拿多少 / 拿了多少」，0 表示平台没给这个字段。
+	// 只用于签到结果回执（百度搭子签完要显示 +N 积分），不参与余额计算。
+	TodayGain float64         `json:"today_gain,omitempty"`
 	Streak    int             `json:"streak,omitempty"`
 	Detail    string          `json:"detail,omitempty"`
 	Error     string          `json:"error,omitempty"`

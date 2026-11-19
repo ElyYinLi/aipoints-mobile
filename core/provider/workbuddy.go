@@ -203,7 +203,9 @@ func (w *WorkBuddy) queryBalanceAt(ctx context.Context, c Credential, path strin
 
 // Checkin 发每日签到。已签时接口回业务码 10001（HTTP 仍是 200）。
 func (w *WorkBuddy) Checkin(ctx context.Context, c Credential) (Result, error) {
-	res := Result{Provider: "workbuddy", AccountID: c.AccountID}
+	// 必须显式带单位：前端拼提示时若 Unit 为空，会退化成通用的「积分」，
+	// 但 WorkBuddy 这儿的 +100 是它自己的额度，写上单位用户才不会误读。
+	res := Result{Provider: "workbuddy", AccountID: c.AccountID, Unit: "积分"}
 	if c.AccessToken == "" {
 		res.Error = "缺少 accessToken"
 		return res, nil

@@ -70,6 +70,10 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/lottery/draw_all", s.handleLotteryDrawAll)
 	mux.HandleFunc("/api/login/start", s.handleLoginStart)
 	mux.HandleFunc("/api/health", s.handleHealth)
+	// 运行日志：出问题时用户不用装任何调试工具，设置页里直接看请求/错误，
+	// 也能一键复制发给开发者定位。日志在写入侧已脱敏，不含凭据。
+	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
 	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。
 	// 这几条通路完全不依赖平台网页登录，是「添加账号」的可靠兜底。
 	mux.HandleFunc("/api/account/add", s.handleAccountAdd)

@@ -54,8 +54,20 @@ func (c *Client) DoJSON(ctx context.Context, method, url string, headers map[str
 			req.Header.Set(k, v)
 		}
 	}
+	start := time.Now()
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		// 用户连续下拉刷新时，上一轮查询会被 context 取消，这在 UI 上是正常行为。
+		// 把它记成 error 会瞬间刷满 400 条把真问题盖掉，所以直接丢弃。
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
+		// 网络层失败要留痕：用户报「签到不动」时，这行日志能直接区分
+		// 「请求没发出去」和「服务端拒绝」。
+		AddLog(LogEntry{
+			Level: "error", Scope: "http", Method: method, Path: LogPath(url),
+			CostMS: time.Since(start).Milliseconds(), Msg: "请求失败: " + err.Error(),
+		})
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -64,7 +76,54 @@ func (c *Client) DoJSON(ctx context.Context, method, url string, headers map[str
 	if err != nil {
 		return nil, err
 	}
-	return &Response{Status: resp.StatusCode, Body: data}, nil
+	out := &Response{Status: resp.StatusCode, Body: data}
+	logResponse(method, url, out, time.Since(start))
+	return out, nil
+}
+
+// logResponse 给一次请求留一条日志。
+//
+// 只在「非 2xx」或「body 里 code != 0」时记 warn/error —— 正常查询每次都记会
+// 把日志刷满，用户翻了半天看不到真问题。成功请求仅在 debug 意义下有意义，
+// 这里刻意不记，保持日志信噪比。
+func logResponse(method, url string, r *Response, cost time.Duration) {
+	bad := r.Status < 200 || r.Status >= 300
+	var bizCode float64
+	var hasCode bool
+	var msg string
+	if m, err := r.JSON(); err == nil {
+		if v, ok := Num(m["code"]); ok {
+			bizCode, hasCode = v, true
+			// 百度系 0 成功、HarmonyOS 系 200 成功，其余都算异常
+			bad = bad || (v != 0 && v != 200)
+		}
+		if bad {
+			msg = Str(m["msg"])
+			if msg == "" {
+				msg = Str(m["message"])
+			}
+		}
+	}
+	// 一切正常就不记：日志只留异常，信噪比才够高
+	if !bad {
+		return
+	}
+	lvl := "warn"
+	if r.Status >= 400 || r.Status == 0 {
+		lvl = "error"
+	}
+	snippet := ""
+	if msg == "" {
+		snippet = string(r.Body)
+	}
+	e := LogEntry{
+		Level: lvl, Scope: "http", Method: method, Path: LogPath(url),
+		Status: r.Status, CostMS: cost.Milliseconds(), Msg: msg, Response: snippet,
+	}
+	if hasCode {
+		e.Code = bizCode
+	}
+	AddLog(e)
 }
 
 // JSON 把正文解析成 map。解析失败时给出截断后的正文片段便于排查（不含敏感头）。

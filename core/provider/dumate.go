@@ -109,11 +109,20 @@ func (d *Dumate) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	}
 	// 实测字段（dumate2api 网页端）：已签到标志是 hasIssued（今日登录奖励是否已发放）。
 	// 之前猜的 signed_today/claimed 等字段上游根本没有，导致「签完还显示未签到」。
+	//
+	// 关于「早上就显示已签到」：这不是 bug。百度搭子的每日登录积分在**当天 0 点后首次
+	// 打开网页就已自动发放**（hasIssued 变 true），我们点「签到」只是补一次 POST 确认。
+	// 所以早上看到已签是真实状态——用户当天只要打开过一次搭子网页，机会就已经用掉了。
 	snap.CheckedIn = boolOf(digAny(m, "hasIssued", "has_issued", "signed_today", "claimed", "is_signed", "received"))
 	if snap.CheckedIn {
 		snap.Detail = "今日已签到"
 	} else {
 		snap.Detail = "今日未签到"
+	}
+	// 今日可得 / 昨日到账的积分数：hasIssued 为 true 时这个值就是「今天签到拿了多少」。
+	// 用户反馈「签完只有状态没有 +N」，所以顺手把它带进 Snapshot，供签到结果回执用。
+	if v, ok := httpx.Num(digAny(m, "todayPoints", "today_points", "issuedPoints", "loginBonusPoints", "bonusPoints")); ok {
+		snap.TodayGain = v
 	}
 	// 签到信息接口本身带累计总积分：totalPoints（实测字段名）。
 	// 先填上；quota_overview 拿到可用余额（总额-已用）后再覆盖。
@@ -161,16 +170,19 @@ func (d *Dumate) Checkin(ctx context.Context, c Credential) (Result, error) {
 		res.Error = "缺少 cookie"
 		return res, nil
 	}
+	// 单位固定「积分」，无论成功/已签/失败都要带上，前端拼提示时不必再猜
+	res.Unit = "积分"
 	snap, _ := d.Query(ctx, c)
 	if snap.CheckedIn {
 		res.OK = true
 		res.Already = true
 		res.Message = "今日已签到"
+		res.Gain = snap.TodayGain
 		return res, nil
 	}
 	h := d.headers(c)
-	h["x-bce-request-id"] = randHex(16)
-	resp, err := d.c.DoJSON(ctx, "POST", d.base(c)+"/api/dumate/points/loginBonus", h, map[string]any{})
+	h["x-bce-request-id"] = randUUID()
+	resp, err := d.c.DoJSON(ctx, "POST", d.base(c)+"/api/dumate/points/loginBonus", h, map[string]any{"request_id": randUUID()})
 	if err != nil {
 		res.Error = "网络不通，稍后重试"
 		return res, nil
@@ -194,6 +206,7 @@ func (d *Dumate) Checkin(ctx context.Context, c Credential) (Result, error) {
 		// 百度系业务码 0 表示成功。已经领过常以业务码报错形式返回，按已签处理。
 		if strings.Contains(msgD, "已领") || strings.Contains(msgD, "已签") || strings.Contains(msgD, "重复") {
 			res.OK, res.Already, res.Message = true, true, msgD
+			res.Gain = d.gainOf(ctx, c, snap)
 			return res, nil
 		}
 		res.Error = fmt.Sprintf("业务码 %s: %s", fmtNum(code), msgD)
@@ -204,7 +217,31 @@ func (d *Dumate) Checkin(ctx context.Context, c Credential) (Result, error) {
 	if v, ok := httpx.Num(httpx.Pick(m, "data", "gain")); ok {
 		res.Gain = v
 	}
+	if res.Gain <= 0 {
+		// 领积分接口本身常常不回具体数值（只回 code:0）。用户要的是「今日已签 +N 积分」，
+		// 所以拿不到就直接算差值：签到后总额 - 签到前总额。
+		// 差值法很稳，因为它不依赖任何猜测的字段名。
+		res.Gain = d.gainOf(ctx, c, snap)
+	}
 	return res, nil
+}
+
+// gainOf 用「现在总额 - 签到前总额」反推本次到账积分。
+//
+// 三个来源依次尝试：签到前快照里平台给的今日积分、总额差值、差值兜底 0。
+// 拿不到就返回 0，前端此时不显示 +N（宁可不显示，也不显示错的数）。
+func (d *Dumate) gainOf(ctx context.Context, c Credential, before Snapshot) float64 {
+	if before.TodayGain > 0 {
+		return before.TodayGain
+	}
+	after, err := d.Query(ctx, c)
+	if err != nil || !after.OK {
+		return 0
+	}
+	if gained := after.Balance - before.Balance; gained > 0 {
+		return gained
+	}
+	return 0
 }
 
 func randHex(n int) string {
@@ -213,6 +250,31 @@ func randHex(n int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// randUUID 生成标准 UUID v4（36 字符，8-4-4-4-12 带连字符）。
+//
+// 踩过的坑：抽奖 / 签到这类写接口的 request_id 一开始用 randHex(16)（32 位纯 hex），
+// 真人点了「立即抽奖」直接被百度 BCE 网关挡下：
+//
+//	{"code":410110,"msg":"抽奖请求ID无效"}
+//
+// 网关那层按 UUID 格式校验 request_id，纯 hex 既不满足长度也不满足连字符分段，
+// 直接判非法。注意 x-bce-request-id 头不校验格式，但 body 里的 request_id 校验，
+// 所以两者分开生成、都保持 UUID 形状最省事。
+func randUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// 极端情况下 crypto/rand 不可用：退化用时间去凑一个合法形状，
+		// 宁可碰撞率略高，也不能发出格式非法的 ID（那一定是 410110）
+		ns := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			b[i] = byte(ns >> (8 * uint(i)))
+		}
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // ---------- 抽奖（growth-plan 活动） ----------
@@ -261,9 +323,10 @@ func (d *Dumate) Draw(ctx context.Context, c Credential) (DrawResult, error) {
 		return res, nil
 	}
 	h := d.headers(c)
-	// x-bce-request-id 与 request_id 都用全新的随机值，避免被判重复
-	h["x-bce-request-id"] = randHex(16)
-	body := map[string]any{"request_id": randHex(16)}
+	// x-bce-request-id 与 request_id 都用全新的 UUID，避免被判重复；
+	// request_id 必须是标准 UUID 形状，否则网关直接回 410110（见 randUUID 注释）
+	h["x-bce-request-id"] = randUUID()
+	body := map[string]any{"request_id": randUUID()}
 	resp, err := d.c.DoJSON(ctx, "POST", d.base(c)+dumateGrowth+"/draw", h, body)
 	if err != nil {
 		res.Error = "网络不通，稍后重试"
@@ -286,6 +349,13 @@ func (d *Dumate) Draw(ctx context.Context, c Credential) (DrawResult, error) {
 		msg := strOf(pick(m, "msg", "message"))
 		if strings.Contains(msg, "次数") || strings.Contains(msg, "已用完") || strings.Contains(msg, "没有") {
 			res.Error = "没有抽奖机会"
+			return res, nil
+		}
+		// 410110 = 抽奖请求ID无效。历史版本用 32 位纯 hex 当 request_id 必然踩这个坑，
+		// 现在已改用标准 UUID，正常不会再出现；真再出现说明网关改了校验规则，
+		// 直接告诉用户该找开发者，别让他以为是自己的账号问题。
+		if code == 410110 {
+			res.Error = "抽奖请求ID被网关拒绝(410110)，请到设置→运行日志复制日志反馈"
 			return res, nil
 		}
 		res.Error = fmt.Sprintf("业务码 %s: %s", fmtNum(code), msg)

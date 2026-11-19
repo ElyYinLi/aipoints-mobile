@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.5.0-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.5.1-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -45,6 +45,7 @@
 | 📱 **三种视图** | 完整卡片 / 紧凑列表一键切换；长按任意账号可拖动排序 |
 | 🌗 **三态主题** | 跟随系统 / 强制浅色 / 强制深色，状态栏图标明暗同步 |
 | 💾 **免登录迁移** | 备份导出为真实文件（系统文件面板选位置），换机导入即恢复全部账号与登录态 |
+| 🧭 **内置运行日志** | 设置页可直接看每条失败请求的时间、路径、状态码与业务码，一键复制反馈；凭据自动脱敏 |
 | 🪶 **零框架** | 前端不用框架、不用打包器，包体为零，首屏无白屏等待 |
 
 ## 截图
@@ -173,6 +174,28 @@ python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 ```
 
 原理与全部实测坑见 [`docs/SANDBOX-GITHUB.md`](docs/SANDBOX-GITHUB.md)。发版前务必跑 `python3 tools/check_secrets.py .`（CI 已强制执行）。
+
+## 排查问题
+
+出错时不用装任何调试工具：**设置 → 运行日志**里能看到最近 400 条记录。
+
+| 列 | 含义 |
+|---|---|
+| 时间 | 到秒，便于对照「我几点点的按钮」 |
+| 方法 + 路径 | 哪个平台接口，`POST /api/dumate/activity/growth-plan/draw` 这种形式 |
+| 状态 / 业务码 | `HTTP 401` 是登录失效；`code 410110` 是网关幂等 ID 被拒 |
+| 消息 | 服务端返回的原因，或网络层错误（超时、连接被拒） |
+
+三条约定：
+
+1. **只记异常**。成功的查询不写日志，否则一次下拉刷新就能刷掉几十条，把真问题埋掉。
+2. **凭据一律脱敏**。`cookie` / `authorization` / `BDUSS` / `stoken` / 32 位以上连续 hex 全部替换成 `***`，日志可以放心贴出来。
+3. **主动取消不记**。连续下拉刷新会取消上一轮请求，这属于正常交互，不算错误。
+
+其余常见情况：
+
+- **显示「今日已签到」**：百度搭子的每日登录积分在当天首次打开网页时就自动发放了，我们只是补一次确认，不是判断错误。
+- **签到成功没有 `+N`**：平台领积分接口常常不回数值，此时用「签到前后总积分差值」反推；两者都拿不到就不显示 `+N`，宁可不显示也不显示错的数。
 
 ## 设计约束
 

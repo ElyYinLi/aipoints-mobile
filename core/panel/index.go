@@ -33,6 +33,8 @@ const indexTmpl = `<!DOCTYPE html>
   --shadow:0 1px 2px rgba(20,18,30,.06),0 4px 16px rgba(20,18,30,.05);
   --shadow-lg:0 8px 28px rgba(20,18,30,.14);
   --r-xl:28px; --r-lg:20px; --r-md:14px; --r-pill:999px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --hair:rgba(128,128,150,.16);
   --sat:env(safe-area-inset-top); --sab:env(safe-area-inset-bottom);
 }
 @media (prefers-color-scheme: dark){
@@ -440,6 +442,28 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   padding:10px 12px;font-size:12.5px;line-height:1.55;margin-bottom:12px;
 }
 .meta{font-size:12px;color:var(--on-surface-v);text-align:center;padding:14px 0 4px}
+/* ---- 运行日志 ----
+   等宽字体 + 每条一行：用户扫一眼能对上是「什么时间 / 哪个请求 / 什么状态」。
+   失败条目用左侧色条区分级别，不靠颜色文字（避免只有红绿难辨）。 */
+.logbox{
+  background:var(--surface-2);border-radius:var(--r-md);padding:4px 0;
+  max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;
+}
+.logrow{
+  display:flex;gap:8px;align-items:baseline;padding:7px 12px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.5;
+  border-left:3px solid transparent;
+}
+.logrow+.logrow{border-top:1px solid var(--hair)}
+.logrow .lt{color:var(--on-surface-v);flex:none;font-variant-numeric:tabular-nums}
+.logrow .lm{flex:1;min-width:0;word-break:break-all;color:var(--on-surface)}
+.logrow .lm b{font-weight:650}
+.logrow .lc{flex:none;color:var(--on-surface-v);font-variant-numeric:tabular-nums}
+.logrow.warn{border-left-color:var(--warn);background:var(--warn-c)}
+.logrow.error{border-left-color:var(--bad);background:var(--bad-c)}
+.logrow.error .lm{color:var(--bad)}
+.logempty{padding:18px 12px;text-align:center;color:var(--on-surface-v);font-size:12.5px}
+.logrow .sub{color:var(--on-surface-v);font-size:11px}
 /* 卡片右上角的管理入口 */
 .c-more{
   border:0;background:transparent;color:var(--on-surface-v);
@@ -1272,14 +1296,28 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     });
   }
 
+  // 统一的「，+N 单位」文案。所有奖励提示都必须走这里——
+  // 之前各调用点各写各的，漏了单位就变成光秃秃的「+100」，用户看不出是积分还是次数。
+  function gainTxt(r){
+    if (!r || !r.gain) return '';
+    return '，+' + fmt(r.gain) + ' ' + (r.unit || '积分');
+  }
+
+  // 已签但平台没回具体积分数时的兜底说明。
+  // 用户反馈「早上就看到已签到，是不是有时间限制」——顺带解释一句，
+  // 免得他以为是软件判断错了。
+  function alreadyWhy(r){
+    return (r && r.provider === 'dumate') ? '（搭子当天打开网页即自动发放）' : '';
+  }
+
   function doCheckin(id, btn){
     if (btn){ btn.disabled = true; btn.textContent = '…'; }
     return j('/api/checkin?account=' + encodeURIComponent(id), { method: 'POST' })
       .then(function(res){
         var r = Array.isArray(res) ? res[0] : res;
         if (r && r.error){ toast(r.error); }
-        else if (r && r.already){ toast('今天已经签过了'); }
-        else if (r && r.ok){ toast('签到成功' + (r.gain ? '，+' + fmt(r.gain) + ' ' + (r.unit || '积分') : '')); }
+        else if (r && r.already){ toast('今日已签' + gainTxt(r) + (r.gain ? '' : alreadyWhy(r))); }
+        else if (r && r.ok){ toast('签到成功' + gainTxt(r)); }
         else { toast('签到未成功'); }
         return load(true);
       })
@@ -1340,6 +1378,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       });
   }
 
+  // 汇总里的「 +N 单位」片段。必须带单位，且数字和单位之间留空格——
+  // 之前写成 '+100' + '积分' 挤成「+100积分」，读起来别扭。
+  function gainPart(v, unit){
+    if (!v) return '';
+    return ' +' + fmt(v) + ' ' + (unit || '积分');
+  }
+
   // 把三步结果压成一句话：信息密度高，但不能长到被截断。
   function summaryOf(s){
     var parts = ['新签 ' + s.ok];
@@ -1348,13 +1393,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var head = parts.join('，');
     var extra = [];
     if (s.taskClaimed > 0){
-      extra.push('任务 ' + s.taskClaimed + ' 个' + (s.taskGain > 0 ? ' +' + fmt(s.taskGain) + (s.taskUnit ? s.taskUnit : '') : ''));
+      extra.push('任务 ' + s.taskClaimed + ' 个' + gainPart(s.taskGain, s.taskUnit));
     }
     if (s.drawn > 0){
-      extra.push('抽奖 ' + s.drawn + ' 次' + (s.drawGain > 0 ? ' +' + fmt(s.drawGain) + (s.drawUnit || '') : ''));
+      extra.push('抽奖 ' + s.drawn + ' 次' + gainPart(s.drawGain, s.drawUnit));
     }
     if (!extra.length) return head;
-    return head + '｜' + extra.join('，');
+    return head + '｜' + extra.filter(Boolean).join('，');
   }
 
   /* ---------- 下拉刷新 ---------- */
@@ -1567,7 +1612,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
   /* ---------- 设置：账号管理 / 备份 / 版本 ---------- */
   function openSettings(){
-    openSheet('设置', '账号管理、外观、备份导出与导入。', function(body, close){
+    openSheet('设置', '外观、账号、备份与运行日志。', function(body, close){
       body.appendChild(el('div', 'sect-h', '外观'));
       var themeRow = el('div', 'seg');
       ['system', 'light', 'dark'].forEach(function(t){
@@ -1717,6 +1762,113 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       });
       body.appendChild(btnImp);
 
+      /* ---------- 运行日志 ----------
+         用户原话：「设置里添加日志功能，这样有问题了也容易快速定位。」
+         所以这里不做筛选器、不做级别开关，就是一条时间线：
+           时间 · 平台/HTTP · 路径 · 状态/业务码 · 消息
+         出问题时用户点进来看最上面几条，或者整段复制发出来，就能定位。
+         日志在写入侧已脱敏（cookie/token 一律 ***），复制出去是安全的。 */
+      body.appendChild(el('div', 'sect-h', '运行日志'));
+      var logHint = el('div', 'notice',
+        '只记录出错的请求和关键动作，最多保留 400 条，凭据一律脱敏，可直接复制发出去求助。');
+      body.appendChild(logHint);
+
+      var logBox = el('div', 'logbox');
+      body.appendChild(logBox);
+
+      var logBtns = el('div', 'row-btns');
+      var btnLogRefresh = el('button', 'btn ghost', '刷新');
+      var btnLogCopy = el('button', 'btn ghost', '复制全部');
+      var btnLogClear = el('button', 'btn ghost', '清空');
+      logBtns.appendChild(btnLogRefresh);
+      logBtns.appendChild(btnLogCopy);
+      logBtns.appendChild(btnLogClear);
+      body.appendChild(logBtns);
+
+      var lastLogs = [];
+
+      // 网络错误的消息里常带完整 URL（Go 的 *url.Error 就这么拼），
+      // 而路径上一行已经显示了，重复一长串只会把真正的原因挤出屏幕。
+      // 这里把消息里的协议+host 部分砍掉，只留错误本身。
+      function trimURL(text){
+        if (!text) return '';
+        return text.replace(/https?:\/\/[^\s"']+/g, function(u){
+          var i = u.indexOf('/', u.indexOf('//') + 2);
+          return i > 0 ? u.slice(i) : u;
+        });
+      }
+
+      function logLine(e){
+        var row = el('div', 'logrow' + (e.level && e.level !== 'info' ? ' ' + e.level : ''));
+        row.appendChild(el('span', 'lt', e.time || ''));
+        var msg = el('span', 'lm');
+        var head = [];
+        if (e.method) head.push(e.method);
+        if (e.path) head.push(e.path);
+        if (e.scope && e.scope !== 'http') head.unshift(e.scope);
+        msg.appendChild(el('b', '', head.join(' ')));
+        var tail = [];
+        if (e.status) tail.push('HTTP ' + e.status);
+        if (e.code) tail.push('code ' + e.code);
+        // 只在耗时真的偏大时才显示：正常请求几十毫秒写出来是噪音，
+        // 排查超时时这一栏才是有用信息
+        if (e.cost_ms && e.cost_ms >= 1000) tail.push((e.cost_ms / 1000).toFixed(1) + 's');
+        if (e.msg) tail.push(trimURL(e.msg));
+        else if (e.resp) tail.push(trimURL(e.resp));
+        if (tail.length) msg.appendChild(el('div', 'sub', tail.join(' · ')));
+        row.appendChild(msg);
+        return row;
+      }
+
+      function renderLogs(){
+        j('/api/logs?limit=200').then(function(res){
+          var logs = (res && res.logs) || [];
+          lastLogs = logs;
+          logBox.textContent = '';
+          if (!logs.length){
+            logBox.appendChild(el('div', 'logempty', '暂时没有异常记录。'));
+            return;
+          }
+          for (var i = 0; i < logs.length; i++){ logBox.appendChild(logLine(logs[i])); }
+        }).catch(function(e){
+          logBox.textContent = '';
+          logBox.appendChild(el('div', 'logempty', '读取日志失败：' + e.message));
+        });
+      }
+
+      btnLogRefresh.addEventListener('click', function(){ renderLogs(); load(true); });
+      btnLogClear.addEventListener('click', function(){
+        post('/api/logs/clear', {}).then(function(){
+          toast('日志已清空'); renderLogs();
+        }).catch(function(e){ toast('清空失败：' + e.message); });
+      });
+      btnLogCopy.addEventListener('click', function(){
+        if (!lastLogs.length){ toast('暂时没有日志可复制'); return; }
+        var lines = [];
+        for (var i = 0; i < lastLogs.length; i++){
+          var e = lastLogs[i];
+          var seg = [e.date || '', e.time || '', (e.level || 'info').toUpperCase()];
+          if (e.scope) seg.push(e.scope);
+          if (e.method) seg.push(e.method);
+          if (e.path) seg.push(e.path);
+          if (e.status) seg.push('HTTP ' + e.status);
+          if (e.code) seg.push('code ' + e.code);
+          if (e.cost_ms) seg.push(e.cost_ms + 'ms');
+          var line = seg.join(' ');
+          var detail = e.msg || e.resp || '';
+          if (detail) line += ' | ' + detail;
+          lines.push(line);
+        }
+        var txt = '积分矩阵 运行日志（' + lastLogs.length + ' 条）\n' + lines.join('\n');
+        var ta = document.createElement('textarea');
+        ta.value = txt;
+        document.body.appendChild(ta);
+        copyText(ta);
+        document.body.removeChild(ta);
+      });
+
+      renderLogs();
+
       var meta = el('div', 'meta', '版本 —');
       body.appendChild(meta);
       j('/api/meta').then(function(m){
@@ -1773,7 +1925,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
                 .then(function(res){
                   if (res && res.error){ toast(res.error); act.disabled = false; act.textContent = '领取'; }
                   else {
-                    toast('领取成功' + (res && res.gain ? '，+' + fmt(res.gain) + ' ' + (res.unit || '灵石') : ''));
+                    toast('领取成功' + gainTxt(res));
                     loadTasks();
                     load(true);
                   }
@@ -1851,9 +2003,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           if (res && res.error && !res.ok){
             toast(res.error);
           } else if (res && res.ok){
-            var gainTxt = res.gain ? '+' + fmt(res.gain) + ' ' + (res.unit || '积分') : '';
-            history.unshift({ prize: res.prize || '抽中一次', gain: gainTxt });
-            toast('抽中：' + (res.prize || '奖励') + (gainTxt ? '，' + gainTxt : ''));
+            // 局部变量改名，避免遮蔽同名工具函数 gainTxt()（var 会提升到函数作用域，
+            // 遮蔽后同函数里再调 gainTxt() 就会 TypeError）
+            var gText = res.gain ? '+' + fmt(res.gain) + ' ' + (res.unit || '积分') : '';
+            history.unshift({ prize: res.prize || '抽中一次', gain: gText });
+            toast('抽中：' + (res.prize || '奖励') + (gText ? '，' + gText : ''));
           } else {
             toast('没有抽到奖励');
           }

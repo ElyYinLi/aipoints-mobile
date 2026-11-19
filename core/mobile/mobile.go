@@ -13,6 +13,7 @@
 //	CheckinOne(provider, account string) string
 //	CheckinAll() string                按账号顺序串行签到（同平台自动错峰由壳层控时）
 //	Plan(provider string, dayOffset int) string 当日随机排期
+//	Logs(limit int) string             最近运行日志（最新在前）
 package mobile
 
 import (
@@ -30,7 +31,7 @@ import (
 )
 
 // Version 由壳层显示，构建时可通过 -ldflags 注入。
-var Version = "0.5.0"
+var Version = "0.5.1"
 
 type engine struct {
 	mu     sync.Mutex
@@ -278,6 +279,14 @@ func Plan(providerID string, dayOffset int) string {
 	start := time.Date(day.Year(), day.Month(), day.Day(), 9, 0, 0, 0, day.Location())
 	end := start.Add(2*time.Hour + 30*time.Minute) // 09:00 - 11:30，与桌面版默认区间一致
 	return mustJSON(scheduler.Daily(day, providerID, ids, start, end))
+}
+
+// Logs 返回最近的运行日志 JSON（最新在前）。
+//
+// 面板里已经有「设置 → 运行日志」，这个导出是给壳层兜底用的：
+// 万一内嵌面板没起来，原生侧仍能把这个字符串展示出来或写进系统日志。
+func Logs(limit int) string {
+	return mustJSON(panel.RecentLogs(limit))
 }
 
 func mustJSON(v any) string {
