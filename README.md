@@ -175,6 +175,13 @@ python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 
 原理与全部实测坑见 [`docs/SANDBOX-GITHUB.md`](docs/SANDBOX-GITHUB.md)。发版前务必跑 `python3 tools/check_secrets.py .`（CI 已强制执行）。
 
+## 给接手的人
+
+如果是 AI 或新同学接手这个项目，先读 **[docs/AI-交接文档.md](docs/AI-交接文档.md)**。
+
+那份文档包含：仓库地图、三个抽象接口、**14 个已踩过的坑**（含每个坑的根因与修法）、
+各平台接口清单、加新平台的完整清单、推代码方式、CI 与 Release 机制的用法、界面代码导航。
+
 ## 排查问题
 
 出错时不用装任何调试工具：**设置 → 运行日志**里能看到最近 400 条记录。
