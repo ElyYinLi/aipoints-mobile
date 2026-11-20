@@ -23,3 +23,8 @@ secrets/
 
 # gomobile 中间产物
 *.aar
+
+# Python 字节码：tools/ 下的脚本跑一次就会生成，
+# 不忽略的话下一次推送会把 .pyc 一起推上去污染仓库
+__pycache__/
+*.py[cod]

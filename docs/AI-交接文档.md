@@ -75,9 +75,9 @@
 ├── android/                   Java 壳 + 零 Gradle 构建脚本 build-apk.sh
 ├── .github/workflows/         core-ci / build-android / build-ios
 ├── tools/
-│   ├── push-via-api.sh        ★ 沙箱里推代码只能用它（见 5.1）
-│   ├── check_secrets.py       提交前扫密钥
-│   └── gh_sync.py
+│   ├── gh_sync.py             ★ 沙箱里推代码用它（见 5.1）
+│   ├── push-via-api.sh        上面那个的薄封装，等价，习惯用哪个都行
+│   └── check_secrets.py       提交前扫密钥
 └── docs/                      逆向笔记、平台接口备忘、设计约束
 ```
 
@@ -628,18 +628,27 @@ POST /v2/plugin/auth/state  → 拿到 authUrl
 `git push` 会卡 130 秒后报 `Failed to connect to github.com port 443`。必须用 Git Data API：
 
 ```bash
-GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
+export GH_TOKEN=<PAT>
+python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --dry-run   # 先看差异
+python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
+# 等价快捷方式：MSG="feat: xxx" GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
 ```
 
-脚本会：按当前 `HEAD` 的树逐文件建 blob → 建 tree → 建 commit → 移动 `main` 引用。**它推的是 git 已提交的内容**，所以要先本地 commit。
+脚本会：用 blob sha 比对本地与远端 → 只给有差异的文件建 blob → 带 `base_tree` 建 tree → 建 commit → 移动 `main` 引用（`force:false`，只允许快进）。
+
+三条必须记住的：
+
+- **`base_tree` 不能省**。缺了它等于按本地文件重建整棵树，远端有、本地没有的文件会被静默删除。0.6.0 推送时旧脚本就踩在这个点上，已改为薄封装。
+- **mode 从 git 读，不靠后缀猜**。按 `.sh` 结尾判 100755 会把非 `.sh` 的可执行文件降成 100644，推上去就丢了可执行位，`git status` 还看不出来。
+- **推的是工作区**（已跟踪 + 未忽略的未跟踪文件），不需要先 `git commit`。这是与旧脚本的语义差别：旧的要先 commit。
 
 ### 5.2 提交流程
 
 ```bash
 cd core && gofmt -w . && go vet ./... && go test ./...     # 必须全绿
 cd .. && python3 tools/check_secrets.py                     # 扫密钥
-git add -A && git commit
-GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
+git add -A && git commit          # 本地留档，便于回溯
+python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
 ```
 
 ### 5.3 CI（三个工作流，push 到 main 自动跑）
@@ -873,7 +882,7 @@ cd core && go run ./cmd/pointsctl -action serve -dir /tmp/pdata
 cd core && go run ./cmd/pointsctl -action query -provider dumate -cookie "BDUSS=..."
 
 # 推代码
-GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
+python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
 
 # 密钥扫描
 python3 tools/check_secrets.py

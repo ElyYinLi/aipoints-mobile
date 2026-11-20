@@ -62,20 +62,50 @@ def blob_sha(data: bytes) -> str:
     return h.hexdigest()
 
 
-def local_files(root: str) -> dict[str, bytes]:
-    """列出 git 跟踪的文件（走 git ls-files，自然遵守 .gitignore）。"""
-    out = subprocess.run(
-        ["git", "-C", root, "ls-files", "-z"],
+def local_files(root: str) -> tuple[dict[str, tuple[bytes, str]], int]:
+    """列出要同步的文件，返回 {路径: (内容, git mode)} 与未跟踪文件数。
+
+    两件事必须一起做，少一个都会静默出错：
+
+    1. **mode 从 git 读，不靠后缀猜**。早先按 `.sh` 结尾判 100755，
+       结果非 `.sh` 的可执行文件（比如无后缀的构建脚本）会被降成 100644，
+       推上去就没有可执行位了，且 git status 看不出来。
+    2. **未跟踪但未被忽略的文件也要算**。沙箱里新写的文件常常还没 `git add`，
+       只列 `ls-files` 会漏推——提交成功、CI 通过、文件却不在，最难查。
+       这类文件的 mode 无从得知，按后缀给默认值。
+    """
+    files: dict[str, tuple[bytes, str]] = {}
+
+    tracked = subprocess.run(
+        ["git", "-C", root, "ls-files", "-s", "-z"],
         capture_output=True, check=True,
     ).stdout.split(b"\0")
-    files = {}
-    for raw in out:
+    for raw in tracked:
         if not raw:
             continue
-        rel = raw.decode()
-        with open(os.path.join(root, rel), "rb") as f:
-            files[rel] = f.read()
-    return files
+        meta, _, rel = raw.partition(b"\t")
+        mode = meta.split(b" ")[0].decode()
+        path = rel.decode()
+        with open(os.path.join(root, path), "rb") as f:
+            files[path] = (f.read(), mode)
+
+    untracked = subprocess.run(
+        ["git", "-C", root, "ls-files", "-o", "-z", "--exclude-standard"],
+        capture_output=True, check=True,
+    ).stdout.split(b"\0")
+    added = 0
+    for raw in untracked:
+        if not raw:
+            continue
+        path = raw.decode()
+        full = os.path.join(root, path)
+        if os.path.islink(full) or not os.path.isfile(full):
+            continue
+        with open(full, "rb") as f:
+            files[path] = (f.read(), "100755" if path.endswith(".sh") else "100644")
+        added += 1
+
+    return files, added
 
 
 def main() -> None:
@@ -88,8 +118,8 @@ def main() -> None:
     args = ap.parse_args()
 
     root = os.path.abspath(args.root)
-    local = local_files(root)
-    print(f"本地文件 {len(local)} 个")
+    local, untracked = local_files(root)
+    print(f"本地文件 {len(local)} 个" + (f"（其中 {untracked} 个未 git add）" if untracked else ""))
 
     # 远端当前 tree（仓库为空时 404，按空树处理）
     try:
@@ -107,7 +137,7 @@ def main() -> None:
         print("远端为空分支，按首次提交处理")
         base_commit, remote = None, {}
 
-    changed = {p: b for p, b in local.items() if remote.get(p) != blob_sha(b)}
+    changed = {p: v for p, v in local.items() if remote.get(p) != blob_sha(v[0])}
     deleted = [p for p in remote if p not in local]
     print(f"需更新 {len(changed)} 个，需删除 {len(deleted)} 个")
 
@@ -124,14 +154,14 @@ def main() -> None:
 
     # 一次性建新 tree：已有文件用 base_tree 的 mode/type，新文件补上
     entries = []
-    for path, content in changed.items():
+    for path, (content, mode) in changed.items():
         blob = call("POST", f"/repos/{args.repo}/git/blobs", {
             "content": base64.b64encode(content).decode(),
             "encoding": "base64",
         })
         entries.append({
             "path": path,
-            "mode": "100755" if path.endswith(".sh") else "100644",
+            "mode": mode,
             "type": "blob",
             "sha": blob["sha"],
         })
