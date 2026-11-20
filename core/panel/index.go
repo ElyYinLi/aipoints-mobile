@@ -177,7 +177,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 @keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 .card:active{transform:scale(.988);transition:transform .12s}
 .card.err{border-color:color-mix(in srgb,var(--bad) 40%,var(--outline-v))}
-.c-top{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+.c-top{display:flex;align-items:center;gap:10px;margin-bottom:0}
 .avatar{
   width:38px;height:38px;border-radius:12px;display:grid;place-items:center;
   font-size:15px;font-weight:700;color:#fff;flex:0 0 auto;
@@ -186,12 +186,16 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .c-name{flex:1;min-width:0}
 .c-name .p{font-size:15px;font-weight:640;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .c-name .s{font-size:12.5px;color:var(--on-surface-v);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.balance{display:flex;align-items:baseline;gap:5px;font-variant-numeric:tabular-nums;
-  margin-left:48px;margin-top:-2px}
-.balance .n{font-size:24px;font-weight:690;letter-spacing:-.03em}
-.balance .u{font-size:12.5px;color:var(--on-surface-v)}
-.c-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;
-  padding-top:10px;border-top:1px solid var(--outline-v)}
+/* 余额紧贴在标题那一行的右端，不再单独占一行并左缩进 48px。
+   原来余额行 margin-left:48px，导致头像下沿到卡片左侧出现一条空带，
+   视觉上余额像是悬空的（用户原话「左侧为什么还有那么多空白」）。
+   现在余额、标题、··· 同处一行，右侧一列对齐，卡片高度也少了约 30px。 */
+.balance{display:flex;align-items:baseline;gap:4px;font-variant-numeric:tabular-nums;
+  margin-left:auto;flex:0 0 auto;padding-left:6px}
+.balance .n{font-size:20px;font-weight:700;letter-spacing:-.025em}
+.balance .u{font-size:11.5px;color:var(--on-surface-v);font-weight:560}
+.c-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;
+  padding-top:11px;border-top:1px solid var(--outline-v)}
 .status{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--on-surface-v);min-width:0}
 /* 状态文案现在带「+N 单位」，比原来长，给按钮组留出固定宽度后允许省略 */
 .status{flex:1}
@@ -199,7 +203,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .status.ok{color:var(--ok)}.status.bad{color:var(--bad)}
 .status svg{width:15px;height:15px}
 .pill{
-  border:0;border-radius:var(--r-pill);padding:9px 18px;font-size:13.5px;font-weight:640;
+  border:0;border-radius:var(--r-pill);padding:8px 15px;font-size:13px;font-weight:640;
   background:var(--primary);color:var(--on-primary);
   transition:transform .14s,opacity .14s,background .14s;
   display:inline-flex;align-items:center;gap:6px;
@@ -221,25 +225,27 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
    紧凑视图给「只想扫一眼签没签」的场景，一屏能装下十几个账号。 */
 .list.compact{gap:7px}
 .row-item{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;gap:9px;
   background:var(--card);border:1px solid var(--outline-v);
-  border-radius:var(--r-md);padding:9px 12px;box-shadow:var(--shadow);
+  border-radius:var(--r-md);padding:8px 11px;box-shadow:var(--shadow);
   animation:rise .26s cubic-bezier(.2,.8,.2,1) both;
 }
 .row-item .avatar{width:30px;height:30px;border-radius:9px;font-size:12.5px}
 .row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:0}
-.row-main .t{font-size:13.5px;font-weight:620;letter-spacing:-.01em;
+.row-main .t{font-size:13px;font-weight:620;letter-spacing:-.01em;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row-main .d{font-size:11.5px;color:var(--on-surface-v);margin-top:0;
+.row-main .d{font-size:11px;color:var(--on-surface-v);margin-top:1px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row-main .d.bad{color:var(--bad)}
-.row-bal{flex:0 0 auto;text-align:right;font-variant-numeric:tabular-nums;
-  display:flex;align-items:baseline;gap:3px}
-.row-bal .n{font-size:15.5px;font-weight:680;letter-spacing:-.02em}
-.row-bal .u{font-size:10.5px;color:var(--on-surface-v)}
-.row-act{flex:0 0 auto;display:flex;align-items:center;gap:5px}
-/* 紧凑视图里的操作按钮做成小号胶囊，高度和行高对齐 */
-.row-act .pill{padding:5px 11px;font-size:12px;border-radius:var(--r-pill)}
+/* 副标题里的余额比说明文字重一档，但不抢标题的主次 */
+.row-main .d .d-bal{font-size:12.5px;font-weight:700;color:var(--on-surface);
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.row-main .d .d-sep{color:var(--on-surface-v)}
+.row-act{flex:0 0 auto;display:flex;align-items:center;gap:4px}
+/* 紧凑视图里的操作按钮做成小号胶囊，高度和行高对齐。
+   0.6.2：任务/抽奖不再用图标——图标在 30px 的方框里既占宽又看不出是什么，
+   换成同样宽度的文字反而更好认（用户原话「那个图标有个鸟用」）。 */
+.row-act .pill{padding:4px 9px;font-size:11.5px;border-radius:var(--r-pill);gap:0}
 .row-act .pill.mute{background:var(--surface-2);color:var(--on-surface-v)}
 .row-item.err .row-main .t{color:var(--bad)}
 
@@ -442,8 +448,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .lot-tx{flex:1;min-width:0;display:flex;flex-direction:column}
 .lot-tx b{font-size:13.5px;font-weight:640;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lot-tx i{font-style:normal;font-size:11.5px;color:var(--ok);margin-top:1px}
-/* 抽奖按钮用描边风格，与「任务」区分主次 */
-.pill.lottery{background:var(--warn-c);color:var(--warn)}
+/* 抽奖按钮：和「任务」同一种低调底色。
+   0.6.2 之前抽奖单独用黄色（--warn-c），一张卡片上蓝（签到）、绿（已签）、
+   黄（抽奖）三种彩色按钮并排，看着很花，也没有理由把抽奖单独强调出来。
+   现在只保留一个彩色按钮（签到），其余都用表面色。 */
+.pill.lottery{background:var(--surface-2);color:var(--on-surface-v)}
+.pill.lottery:active{background:var(--surface-3)}
 .sect-h{font-size:13px;font-weight:680;color:var(--on-surface-v);
   margin:18px 4px 10px;letter-spacing:.02em}
 .sect-h:first-child{margin-top:6px}
@@ -451,6 +461,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   background:var(--warn-c);color:var(--warn);border-radius:var(--r-md);
   padding:10px 12px;font-size:12.5px;line-height:1.55;margin-bottom:12px;
 }
+/* 中性说明条：只是解释「这是什么」，没有风险含义，不该用警示色抢注意力 */
+.notice.soft{background:var(--surface-2);color:var(--on-surface-v)}
 .meta{font-size:12px;color:var(--on-surface-v);text-align:center;padding:14px 0 4px}
 /* ---- 运行日志 ----
    等宽字体 + 每条一行：用户扫一眼能对上是「什么时间 / 哪个请求 / 什么状态」。
@@ -496,10 +508,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .seg-item:active{transform:scale(.97)}
 
 /* ---- 令牌列表（0.6.0） ----
-   一条令牌 = 名称 + key（脱敏） + 额度；操作收进右侧小按钮。
+   一条令牌 = 名称 + 完整 key + 额度；操作排在卡片底部一行。
    为什么不做表格：手机上一篇 12 列的表没人看得下去，竖排两行最省眼。 */
 .tok{
-  background:var(--surface-1);border-radius:var(--r-md);
+  background:var(--surface-2);border-radius:var(--r-md);
   padding:11px 13px;margin-bottom:9px;
 }
 .tok.off{opacity:.55}
@@ -509,20 +521,15 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .tok-h .st{font-size:11px;font-weight:640;padding:1px 7px;border-radius:var(--r-pill);
   background:var(--ok-c);color:var(--ok);flex:0 0 auto}
 .tok.off .tok-h .st{background:var(--bad-c);color:var(--bad)}
+/* key 本体：完整一行，等宽字体，长 key 折行也不截断。
+   0.6.2：复制按钮移到下方 tok-act 里和「禁用/删除」同排——
+   之前它挂在 key 行右端单独一个位置，一列按钮被拆成两处，看着很散。 */
 .tok-key{
-  font-family:var(--mono);font-size:11.5px;color:var(--on-surface-v);
-  margin-top:3px;word-break:break-all;line-height:1.45;
-  flex:1;min-width:0;
+  font-family:var(--mono);font-size:12px;color:var(--on-surface);
+  margin-top:5px;word-break:break-all;line-height:1.5;
+  padding:6px 9px;border-radius:8px;
+  background:var(--surface-1);
 }
-/* key 行：key 本体 + 复制按钮。按钮用 flex:0 0 auto 保证不被长 key 挤没。 */
-.tok-key-row{display:flex;align-items:center;gap:8px;margin-top:3px}
-.tok-copy{
-  flex:0 0 auto;border:0;border-radius:var(--r-pill);
-  padding:4px 11px;font-size:11.5px;font-weight:640;
-  background:var(--surface-3);color:var(--primary);
-  transition:transform .14s,background .14s;
-}
-.tok-copy:active{transform:scale(.94);background:var(--surface-2)}
 .tok-meta{font-size:11.5px;color:var(--on-surface-v);margin-top:3px}
 .tok-meta b{font-weight:620;color:var(--on-surface)}
 .tok-lim{font-size:11px;color:var(--on-surface-v);margin-top:2px;word-break:break-all}
@@ -1195,11 +1202,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     if (fail) chip('bad', fail + ' 个异常');
   }
 
-  // 「任务 / 抽奖」这类入口按钮：样式统一，图标 + 文字都小一号
+  // 「任务 / 抽奖」这类入口按钮：样式统一。
+  // icon 传空字符串就不渲染 svg —— 任务按钮原来带一个小方框图标，
+  // 用户明确说没用还占地方，现在全部只留文字。
   function pillBtn(icon, text, cls, label, onClick){
     var b = document.createElement('button');
     b.className = 'pill ' + cls;
-    b.innerHTML = ICON(icon) + '<span>' + esc(text) + '</span>';
+    b.innerHTML = (icon ? ICON(icon) : '') + '<span>' + esc(text) + '</span>';
     if (label) b.setAttribute('aria-label', label);
     b.addEventListener('click', function(e){
       if (e) e.stopPropagation();
@@ -1226,6 +1235,16 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     s.textContent = r.label || r.account_id || '';
     nm.appendChild(p); nm.appendChild(s);
     top.appendChild(av); top.appendChild(nm);
+
+    // 余额和标题同一行、靠右。这样右侧是「余额 → ···」一列对齐，
+    // 左侧不再有 48px 的空白带，卡片整体也矮了一截。
+    var bal = document.createElement('div'); bal.className = 'balance';
+    var n = document.createElement('span'); n.className = 'n';
+    n.textContent = r.error ? '—' : fmtMoney(r.balance);
+    var u = document.createElement('span'); u.className = 'u'; u.textContent = r.unit || '积分';
+    bal.appendChild(n); bal.appendChild(u);
+    top.appendChild(bal);
+
     // 卡片右上角的管理入口：用户明确要求「删除入口」，不能藏在设置里
     var more = document.createElement('button');
     more.className = 'c-more';
@@ -1236,13 +1255,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       openAccountMenu(r);
     });
     top.appendChild(more);
-
-    var bal = document.createElement('div'); bal.className = 'balance';
-    var n = document.createElement('span'); n.className = 'n';
-    n.textContent = r.error ? '—' : fmtMoney(r.balance);
-    var u = document.createElement('span'); u.className = 'u'; u.textContent = r.unit || '积分';
-    bal.appendChild(n); bal.appendChild(u);
-    card.appendChild(top); card.appendChild(bal);
+    card.appendChild(top);
 
     var foot = document.createElement('div'); foot.className = 'c-foot';
     var st = document.createElement('div');
@@ -1260,14 +1273,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     btns.className = 'c-actions';
 
     if (r.has_tasks && !r.error){
-      btns.appendChild(pillBtn('task', '任务', 'task',
+      btns.appendChild(pillBtn('', '任务', 'task',
         '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务',
         function(){ openTasks(r); }));
     }
     // 抽奖入口不判断 r.error：余额查询失败（比如刚过期）不代表抽奖也失败，
     // 让用户点进去看真实状态，比事先替他判定更有用。
     if (r.has_lottery){
-      btns.appendChild(pillBtn('ticket', '抽奖', 'lottery',
+      btns.appendChild(pillBtn('', '抽奖', 'lottery',
         '查看 ' + (r.provider_name || r.provider || '') + ' 抽奖',
         function(){ openLottery(r); }));
     }
@@ -1301,41 +1314,49 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
     var main = document.createElement('div'); main.className = 'row-main';
     var t = document.createElement('div'); t.className = 't';
-    t.textContent = (r.provider_name || r.provider || '') + ' · ' + (r.label || r.account_id || '');
+    // 平台名和备注相同时只写一遍。之前固定拼「平台 · 备注」，
+    // 备注默认就等于平台名（比如「AiPy Pro · AiPy Pro」），
+    // 白白吃掉一半宽度，把名字挤成省略号——这就是「紧凑显示不全」的主因。
+    var pfName = r.provider_name || r.provider || '';
+    var lbl = r.label || r.account_id || '';
+    t.textContent = (lbl && lbl !== pfName) ? pfName + ' · ' + lbl : pfName;
     var d = document.createElement('div'); d.className = 'd' + (r.error ? ' bad' : '');
-    d.textContent = detailText(r);
+    // 余额并入副标题：「1,200 积分 · 今日已签」。
+    //
+    // 之前余额是独立一列、夹在名字和按钮之间——而每行的按钮数量不一样
+    // （有任务/抽奖/···/签到之分），按钮组一宽就把余额推得左右乱跑，
+    // 三行看下来余额根本不在一条竖线上。挪进左列之后：
+    // 左边两行文字统一从头像右侧起，右边按钮统一右对齐，两个基准都稳了。
+    if (!r.error){
+      var bn = document.createElement('b'); bn.className = 'd-bal';
+      bn.textContent = fmtMoney(r.balance);
+      d.appendChild(bn);
+      d.appendChild(document.createTextNode(' ' + (r.unit || '积分')));
+      var sep = document.createElement('span'); sep.className = 'd-sep';
+      sep.textContent = ' · ' + detailText(r);
+      d.appendChild(sep);
+    } else {
+      d.textContent = detailText(r);
+    }
     main.appendChild(t); main.appendChild(d);
     row.appendChild(main);
 
-    var bal = document.createElement('div'); bal.className = 'row-bal';
-    var bn = document.createElement('span'); bn.className = 'n';
-    bn.textContent = r.error ? '—' : fmtMoney(r.balance);
-    var bu = document.createElement('span'); bu.className = 'u'; bu.textContent = r.unit || '积分';
-    bal.appendChild(bn); bal.appendChild(bu);
-    row.appendChild(bal);
-
     var act = document.createElement('div'); act.className = 'row-act';
-    // 紧凑行：任务 / 抽奖给图标按钮（高频），令牌进 ···（低频）。
+    // 紧凑行：任务 / 抽奖用文字小胶囊（高频），令牌进 ···（低频）。
     //
-    // 0.6.1 修正：0.6.0 把三个全收进菜单，理解偏了。紧凑行空间紧，
-    // 所以这里的任务 / 抽奖只露图标不带文字，宽度控制在 30px，
-    // 加上签到一共三个可点区域，仍不低于 30px 的误触阈值。
+    // 0.6.2：上一版这里放的是 30px 的纯图标方框，两个图标吃掉 64px 宽度，
+    // 名字被挤成「AiPy Pro · AiPy ...」，而且图标本身也看不出是任务还是抽奖。
+    // 换成同样尺寸的文字反而更窄、更好认。
     if (r.has_tasks && !r.error){
-      var tBtn = pillBtn('task', '', 'mute', '任务', function(){ openTasks(r); });
-      tBtn.style.width = '30px'; tBtn.style.height = '30px';
-      tBtn.innerHTML = ICON('task');
-      act.appendChild(tBtn);
+      act.appendChild(pillBtn('', '任务', 'mute', '任务', function(){ openTasks(r); }));
     }
     if (r.has_lottery){
-      var lBtn = pillBtn('ticket', '', 'mute', '抽奖', function(){ openLottery(r); });
-      lBtn.style.width = '30px'; lBtn.style.height = '30px';
-      lBtn.innerHTML = ICON('ticket');
-      act.appendChild(lBtn);
+      act.appendChild(pillBtn('', '抽奖', 'mute', '抽奖', function(){ openLottery(r); }));
     }
     if (r.has_tokens){
       var rowMore = document.createElement('button');
       rowMore.className = 'c-more';
-      rowMore.style.width = '28px'; rowMore.style.height = '28px';
+      rowMore.style.width = '26px'; rowMore.style.height = '26px';
       rowMore.setAttribute('aria-label', '更多操作');
       rowMore.innerHTML = ICON('more');
       rowMore.addEventListener('click', function(e){
@@ -1735,7 +1756,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         if (!quiet) toast(sum);
         // 收尾文案：让用户明确知道「这轮结束了，页面已是最新」
         if (stat.bad){
-          actErr('完成 · ' + sum + '（有失败，可下拉刷新重试）', 6000);
+          actErr('完成 · ' + sum + '，下拉可重试', 6000);
         } else {
           actDone('完成 · ' + sum, 4000);
         }
@@ -2736,9 +2757,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       var info = el('div', 'sheet-sub', '账号 ID：' + (r.account_id || '—'));
       body.appendChild(info);
 
-      if (r.has_tasks) navItem('task', '每日任务', '查看进度并领取奖励', function(){ openTasks(r); });
-      if (r.has_lottery) navItem('ticket', '抽奖', '查看剩余次数与奖品', function(){ openLottery(r); });
-      // 令牌只在支持 TokenManager 的平台出现（目前只有 AiPy），由 Meta.Tokens 决定
+      // 菜单里只留「API 令牌」。
+      //
+      // 任务和抽奖已经在卡片的按钮区直接摆着（卡片和紧凑行都有），
+      // 再在菜单里重复一遍既占位置又多一次点击。用户的原话是
+      // 「aipy 的菜单里只放 api 令牌」——这里照做，别的都不放。
+      // 令牌只在支持 TokenManager 的平台出现（目前只有 AiPy），由 Meta.Tokens 决定。
       if (r.has_tokens) navItem('key', 'API 令牌', '管理平台调用密钥', function(){ openTokens(r); });
 
       var toggle = el('button', 'sheet-item');
@@ -2787,9 +2811,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var box = null, inUse = '', usable = false;
 
     openSheet(name + ' · API 令牌', r.label || r.account_id || '', function(body, close){
-      var tip = el('div', 'notice',
-        '令牌是平台对外发放的调用密钥（sk- 开头），和登录凭据是两回事。' +
-        '点「复制」即可拷走整条 key。');
+      // 说明条用中性色：这里没有风险，用警示黄会把整页的注意力都吸走
+      var tip = el('div', 'notice soft',
+        '令牌是平台发放的调用密钥（sk- 开头），和登录凭据是两回事。点「复制」拷走整条 key。');
       body.appendChild(tip);
 
       var bar = el('div', 'row-btns');
@@ -2835,11 +2859,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         });
       }
 
-      function maskKey(k){
-        if (!k) return '（创建时未返 key，可能已失效）';
-        if (k.length <= 14) return k;
-        return k.slice(0, 7) + '····' + k.slice(-4);
-      }
+      // 原来的 maskKey() 已删除：它对 key 做首尾截断显示，正是
+      // 「看不到 apikey」的直接原因。现在列表原样透出上游给的 key。
 
       function renderList(list){
         if (!list.length){
@@ -2868,25 +2889,15 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           }
           card.appendChild(h);
 
-          // key 行：完整显示 + 一键复制。
+          // key 行：完整显示。
           //
-          // 0.6.0 只显示首尾几位，用户的原话是「没有显示 apikey，也没有复制功能，
-          // 这就很傻」。列表接口返回的 key 本身就不完整（上游脱敏），
-          // 但只要是完整的一定要原样给出来——这是这条令牌唯一有用的信息，
-          // 藏起来等于让人没法用。复制按钮点一下即入剪贴板。
-          var keyRow = el('div', 'tok-key-row');
-          var keyTxt = el('div', 'tok-key', maskKey(t.key));
+          // 0.6.0 / 0.6.1 这里一直套着 maskKey()，显示成「sk-Zx9Q····7890」，
+          // 用户看到的就是「没有显示 apikey」——脱敏之后这条信息完全没法用。
+          // 令牌列表是本人的私有页面，key 本来就要拿去填到别的客户端里，
+          // 完整透出才是它唯一的用处。复制按钮在下面的操作行里。
+          var keyTxt = el('div', 'tok-key', t.key || '（创建时未返 key，可能已失效）');
           keyTxt.title = t.key || '';
-          keyRow.appendChild(keyTxt);
-          if (t.key){
-            var bCopy = el('button', 'tok-copy', '复制');
-            bCopy.setAttribute('aria-label', '复制令牌');
-            bCopy.addEventListener('click', function(){
-              copyToken(t.key, bCopy);
-            });
-            keyRow.appendChild(bCopy);
-          }
-          card.appendChild(keyRow);
+          card.appendChild(keyTxt);
 
           var meta = el('div', 'tok-meta');
           var quota = t.unlimited_quota ? '不限额度' :
@@ -2900,6 +2911,17 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           if (t.allow_ips) card.appendChild(el('div', 'tok-lim', 'IP 白名单：' + t.allow_ips));
 
           var act = el('div', 'tok-act');
+
+          // 复制放在操作行的第一位，和「禁用 / 删除」排在一起。
+          // 之前它挂在 key 行右端，同一组按钮被拆成上下两处，看着很散。
+          if (t.key){
+            var bCopy = el('button', 'tok-btn', '复制');
+            bCopy.setAttribute('aria-label', '复制令牌');
+            bCopy.addEventListener('click', function(){
+              copyToken(t.key, bCopy);
+            });
+            act.appendChild(bCopy);
+          }
 
           // 编辑已移除：令牌只有「名称 / 额度 / 限制」几个字段，
           // 实际改动需求几乎为零，而编辑面板占满一屏反而把列表挤没了
@@ -2963,6 +2985,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
   function fmtDay(sec){
     if (!sec) return '—';
+    // 上游有的平台返秒、有的返毫秒，13 位按毫秒处理，否则会算出公元 59009 年
+    if (sec > 1e12) sec = Math.floor(sec / 1000);
     var d = new Date(sec * 1000);
     function p(n){ return (n < 10 ? '0' : '') + n; }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
