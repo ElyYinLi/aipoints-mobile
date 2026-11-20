@@ -3,9 +3,6 @@ name: build-android
 # 仓库是公开的：标准托管 runner 在公开仓库下完全免费、不消耗账号额度，
 # 所以 push 就能自动出包。
 on:
-  push:
-    branches: [main]
-    paths: ['core/**', 'android/**', '.github/workflows/build-android.yml']
   workflow_dispatch:
 
 jobs:
