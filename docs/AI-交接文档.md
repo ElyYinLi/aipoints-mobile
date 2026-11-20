@@ -14,6 +14,13 @@
 
 **为什么这么设计**：界面只写一份两端通用；业务逻辑只写一份 Go；凭据不出本机；平台接口改版时只需改一个 provider 文件。
 
+**当前行为（0.5.5 起，改动前务必确认没有破坏）**：
+
+- **冷启动**跑一次完整一键签到：签到 → 领任务奖励 → 抽奖，与点底部按钮**同一条代码路径**（`checkinAll`）
+- **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）
+- 签到进度全程显示在顶部活动条（`#act`），逐账号 `正在签到…（2/3）`
+- 后台久了回来读不到数据时，壳层先探活再**整页重建**（`about:blank` → 面板），不是简单 `reload()`
+
 **仓库**：`github.com/ElyYinLi/aipoints-mobile`（**公开**）· 分支 `main` · MIT
 
 **接手三件事**（按顺序）：
@@ -299,12 +306,14 @@ INIT = """const o=window.matchMedia;window.matchMedia=function(q){
    - `完成 · 新签 2，已签 1`（绿色 4 秒后自动收起）
    - 失败转红：`完成 · 新签 0，失败 1（有失败，可下拉刷新重试）`
 3. 自动签到（`checkinAll({quiet:true})`）走同一套进度，不弹 toast
-4. 页面启动自己就调 `autoCheckin(true)`，不再只依赖壳层注入
+4. 页面启动自己就调 `bootAuto()`（内部就是 `checkinAll`），不再只依赖壳层注入
    （壳层注入可能因为页面未加载完而丢失）
-5. 统计条右侧加 `ⓘ` 说明入口（`openHelp()`），用大白话解释五个问题：
-   自动签、按钮是兜底、百度搭子为什么天然已签、其他平台为什么慢半拍、后台不偷偷签
+5. 统计条右侧加 `ⓘ` 说明入口（`openHelp()`）
 
 > 反面断言在 `TestIndexCheckinShowsProgress` 里：谁改回批量接口，测试就红。
+>
+> **0.5.5 修订**：说明弹层从五段压到三段（用户：「只写你的签到逻辑就行了，
+> 没必要写那么一大堆」）。只保留结论，删掉所有背景解释。
 
 ### 3.23 iOS/Android 后台久了「读取失败」的真正原因
 
@@ -320,12 +329,28 @@ INIT = """const o=window.matchMedia;window.matchMedia=function(q){
 
 1. **壳层**（`PointsApp.swift` / `MainActivity.java`）
    - 记录进入后台的时刻
-   - 回前台时若离开 > 45 秒 → 直接 `reload()` / `web.reload()`
+   - 回前台时若离开 > 45 秒 → 整页重建
    - 短时间切换不重建，避免白屏
-2. **页面**（`notifyReloadThrottled()`）
+2. **页面**（`reloadThrottled()`）
    - fetch 连续失败 → 整页 reload，让 WebKit 重建网络栈
    - **60 秒内只允许一次**，否则「失败→reload→又失败→又 reload」会死循环
    - 用 `last_reload_at` 落 localStorage，跨 reload 依然有效
+
+> **0.5.5 修订（重要）**：上面这套在真机上还不够 —— 用户反馈
+> 「点击重新加载没用，提示的连接断开正在重建页面也没什么用，只能杀掉 app 重开」。
+>
+> 原因：`web.reload()` **有时会复用同一个已损坏的渲染进程**，页面依旧是死的。
+> 现在改成「先探活，再决定」：
+>
+> 1. 注入 `window.__pointsRefresh`，看函数还在不在（`'alive'` / `'dead'`）
+> 2. 函数不在 → 上下文没了 → 立刻重建
+> 3. 函数在 → 3 秒后查 `document.querySelectorAll('.card,.row').length`，
+>    还是 0 说明页面没渲染出来 → 重建
+> 4. 重建 = **先 `about:blank` 再回面板**，强制 WebKit / Chromium 换一个新进程
+>
+> Android 侧的 `MainActivity.rebuild()` 和 iOS 侧的
+> `WKWebView.reloadFromBlank()` 都是这个逻辑。登录页返回后也走重建
+> （原来的 `reload()` 同样可能复用坏进程，表现为「登录完页面空白」）。
 
 ### 3.24 面板内联 JS 的语法闸门
 
@@ -346,6 +371,102 @@ go build → 起临时实例 → curl 首页 → tools/check_panel_js.py → nod
 curl -s http://127.0.0.1:7979/ -o /tmp/page.html
 python3 tools/check_panel_js.py /tmp/page.html
 ```
+
+> **0.5.5 修订**：这个 CI 步骤一开始写成 `go build ./core/cmd/pointsctl`，
+> 在仓库根目录跑会报 `cannot find main module`（根目录不是 Go 模块，`core/` 才是）。
+> 已加 `working-directory: core`，脚本路径改用 `$GITHUB_WORKSPACE/tools/...`。
+
+### 3.25 「打开 App 不签到，点按钮才签」的真凶（0.5.5）
+
+用户原话：
+
+> 「aipy 的每日任务奖励在打开 app 的时候不会去领取，百度搭子的也不会检测领奖
+>   次数和抽奖，只能点击一键签到才有这个动作。意思是打开 App 的签到和领奖逻辑
+>   和一键签到功能一致，相当于打开 App 的时候自动点一次一键签到。」
+
+两个独立的 bug 叠在一起：
+
+**bug 1：待签队列永远为空**
+
+```js
+// 错：函数一进来就组装 todo
+function checkinAll(){
+  var todo = [];
+  for (...state.rows...) { if (!r.checked_in) todo.push(r); }
+```
+
+而打开 App 的那一刻 `state.rows` **还是空数组**（列表一次都没查过），
+于是 `todo.length === 0`，`step()` 立刻返回，直接跳到领奖和刷新。
+表现就是「启动时一个都不签，反而点按钮才签」（点按钮时列表早就加载好了）。
+
+修法：把队列组装挪到 `loadStates()` 里，先 `load()` 拿到真实状态再挑未签的。
+
+```js
+function loadStates(){
+  return load(true).then(function(){
+    todo = [];
+    for (...) { if (!r.error && !r.checked_in) todo.push(r); }
+    total = todo.length;
+  });
+}
+```
+
+**bug 2：启动路径和按钮路径不是同一条**
+
+启动时走的是 `autoCheckin()`，它只 `load` + 挑未签账号，**不领奖、不抽奖**；
+点按钮走的是 `checkinAll()`，三件套齐全。同一份 UI 跑出两种结果。
+
+修法：删掉 `autoCheckin()`，启动直接调 `checkinAll({quiet:true})`。
+`quiet` 只影响「完事后要不要弹 toast」。
+
+> `TestIndexBootRunsFullCheckinFlow` 钉住这两点：
+> 必须存在 `loadStates()`、必须复用 `checkinAll`、必须有 claim/draw 两步。
+
+### 3.26 只有冷启动才自动签（0.5.5）
+
+用户原话：
+
+> 「只有打开应用的时候自动签到，其他切后台等就不要自动签到和领奖了，
+>   这样容易黑号，请求太多了。后续让用户自己点击一键签到就行了。」
+
+之前是「每次回前台都签一轮」：冷启动、`visibilitychange`、`pageshow`、
+Android `onResume`、iOS `didBecomeActive` 全都会触发。一个下午切十次后台
+就是十轮 POST —— 平台风控眼里这就是脚本。
+
+现在的分工：
+
+| 入口 | 行为 |
+|---|---|
+| 页面启动 `bootAuto()` | **完整一键签到**（签到 + 领奖 + 抽奖） |
+| `window.__pointsAutoCheckin` | 同上，壳层冷启动时补一手（`autoTask` 去重） |
+| `visibilitychange` / `pageshow` | 只 `refreshOnResume()`，**纯 GET** |
+| `window.__pointsRefresh` | 同上，给壳层回前台用 |
+| 底部「一键签到」按钮 | 完整一键签到 |
+
+「冷启动」怎么判断：壳层各自维护一个 `bootChecked` 布尔值，
+首次 `onResume` / `didBecomeActive` 才是冷启动，之后都算回前台。
+（进程被杀后重开 → 布尔值重置 → 又会自动签一次，符合预期。）
+
+页面侧的 `refreshOnResume()` 还兼着自愈职责：如果刚启动就 `load` 失败
+（页面出生即残废），限流重建一次。
+
+> `TestIndexResumeDoesNotCheckin` 会扫描 `refreshOnResume()` 函数体，
+> 里面出现 `/api/checkin`、`claim_all`、`draw_all` 任何一个就报错。
+
+### 3.27 小额数值不能显示成 0（0.5.5）
+
+`fmt()` 是 `maximumFractionDigits: 1`，用于积分（几百上千）没问题，
+但 AiPy 的灵石换算是 `quota / 5000`，0.04 灵石会被格式化成 `0`，
+显示成「签到成功，+0 灵石」「今日已签 +0 灵石」—— 看着像签到失败了。
+
+修法：新增两个格式化函数，按数量级自适应。
+
+```js
+fmtGain(v)   // >=100 整数；>=1 一位小数；否则两位小数
+fmtMoney(n)  // 余额：<1 时保留两位
+```
+
+奖励文案（`gainTxt` / `gainPart`）和余额显示都改用它。
 
 ---
 
@@ -445,7 +566,7 @@ GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
 | 文件 | 字段 |
 |---|---|
 | `core/mobile/mobile.go` | `var Version = "0.5.1"` |
-| `android/app/src/main/AndroidManifest.xml` | `versionCode="10"` / `versionName="0.5.1"` |
+| `android/app/src/main/AndroidManifest.xml` | `versionCode` / `versionName`（0.5.5 → 14 / 0.5.5） |
 | `ios/App/Info.plist` | `CFBundleShortVersionString` / `CFBundleVersion` |
 
 外加 `README.md` 的 version badge。
@@ -468,7 +589,12 @@ GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
    ICON / fmt / el / toast / j / post 等工具
    render()            渲染账号列表（按 state.view 决定卡片还是紧凑行）
    doCheckin()         单账号签到
-   checkinAll()        一键签到（签到 → 领任务 → 抽奖，三步串联）
+   checkinAll()        一键签到：loadStates → 逐个签 → 领任务 → 抽奖 → 刷新
+   loadStates()        先读一遍状态再组装待签队列（0.5.5 修复，别再用空 state.rows）
+   bootAuto()          冷启动入口 = checkinAll({quiet:true})，壳层也调它
+   refreshOnResume()   回前台只刷新，不签到（+ 失败时自愈重建）
+   actShow/actDone/actErr  顶部活动条的三种状态
+   fmtGain/fmtMoney    小额数值格式化（灵石 0.04 不能显示成 0）
    summaryOf()         一键签到结果压成一句话
    openSheet()         通用底部弹层
    openSettings()      设置面板（外观 / 账号管理 / 备份 / ★ 运行日志）

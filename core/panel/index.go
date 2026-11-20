@@ -571,6 +571,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     // 整数不显示小数，避免「1,500.00 积分」这种冗余
     return n.toLocaleString('zh-CN', { maximumFractionDigits: n % 1 ? 1 : 0 });
   }
+  // 余额专用：小额（<1）保留两位，至少让「0.04 灵石」不显示成「0」。
+  function fmtMoney(n){
+    n = Number(n) || 0;
+    if (n > 0 && n < 1) return (Math.round(n * 100) / 100).toString();
+    return fmt(n);
+  }
   function esc(s){
     return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
@@ -1095,7 +1101,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
     var bal = document.createElement('div'); bal.className = 'balance';
     var n = document.createElement('span'); n.className = 'n';
-    n.textContent = r.error ? '—' : fmt(r.balance);
+    n.textContent = r.error ? '—' : fmtMoney(r.balance);
     var u = document.createElement('span'); u.className = 'u'; u.textContent = r.unit || '积分';
     bal.appendChild(n); bal.appendChild(u);
     card.appendChild(top); card.appendChild(bal);
@@ -1162,7 +1168,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
     var bal = document.createElement('div'); bal.className = 'row-bal';
     var bn = document.createElement('span'); bn.className = 'n';
-    bn.textContent = r.error ? '—' : fmt(r.balance);
+    bn.textContent = r.error ? '—' : fmtMoney(r.balance);
     var bu = document.createElement('span'); bu.className = 'u'; bu.textContent = r.unit || '积分';
     bal.appendChild(bn); bal.appendChild(bu);
     row.appendChild(bal);
@@ -1306,9 +1312,19 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 一个看起来像出错的东西。所以现在：
   //   有 today_gain → 今日已签 +N 单位
   //   没有          → 今日已签          （干净收尾，不留悬念）
+  // 小数点位：灵石这类小额单位，0.04 会被 fmt 四舍五入成「0」，
+  // 显示「+0 灵石」「0.1 灵石」看着像坏了。这里按数量级自适应：
+  //   >= 100 → 整数；>= 1 → 一位小数；否则两位小数。
+  function fmtGain(v){
+    var n = Number(v);
+    if (!isFinite(n) || n <= 0) return '';
+    if (n >= 100) return fmt(n);
+    if (n >= 1) return (Math.round(n * 10) / 10).toString();
+    return (Math.round(n * 100) / 100).toString();
+  }
   function gainNum(r){
     var v = Number(r && r.today_gain);
-    return isFinite(v) && v > 0 ? fmt(v) : '';
+    return isFinite(v) && v > 0 ? fmtGain(v) : '';
   }
   function detailText(r){
     if (!r) return '';
@@ -1328,7 +1344,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 之前各调用点各写各的，漏了单位就变成光秃秃的「+100」，用户看不出是积分还是次数。
   function gainTxt(r){
     if (!r || !r.gain) return '';
-    return '，+' + fmt(r.gain) + ' ' + (r.unit || '积分');
+    return '，+' + fmtGain(r.gain) + ' ' + (r.unit || '积分');
   }
 
   // 已签但平台没回具体积分数时的兜底说明。
@@ -1420,11 +1436,15 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 「是不是要我自己点」「是不是后台签了前台没刷新」。改成逐个请求后，
   // 每签一个就更新顶部活动条：百度搭子 正在签到…（2/3）→ 已签 +500 积分。
   //
+  // 关键改动（0.5.5）：打开 App 走的就是这一个函数，和点「一键签到」完全同一条
+  // 路径——签到 + 领任务奖励 + 抽奖三件套一起做。之前启动路径只签到、不领奖，
+  // 于是同一份代码跑出两种结果，用户看到「开 App 没领奖，点按钮才领」。
+  //
   // 并发策略仍是串行（一个签完再发下一个），保留原来的防风控意图；
   // 账号之间留 250ms 间隔，不制造瞬时并发。
   function checkinAll(opts){
     if (state.busy) return Promise.resolve(null);
-    var quiet = !!(opts && opts.quiet);   // 自动签到：完成后不弹 toast，只更新活动条
+    var quiet = !!(opts && opts.quiet);   // 启动自动跑：完成后不弹 toast，只更新活动条
     state.busy = true;
     var b = $('btnAll');
     var origHTML = b ? b.innerHTML : '';
@@ -1432,14 +1452,28 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var stat = { ok: 0, skip: 0, bad: 0, taskClaimed: 0, taskGain: 0, taskUnit: '',
                  drawn: 0, drawGain: 0, drawPrizes: [], drawUnit: '' };
 
-    // 待签队列：出错的账号跳过（它连状态都读不到，签也白签）
+    // 待签队列必须在「先读一遍状态」之后才组装。
+    //
+    // 0.5.5 修复：之前是在函数一进来就用 state.rows 组装 todo，
+    // 而打开 App 的那一刻 state.rows 还是空的（列表还没查过），
+    // 结果 todo 永远是 0 个 —— 于是启动时「一个都不签」，只跑领奖和刷新，
+    // 用户看到的就是「打开 App 不签到，点按钮才签」。
+    // 现在先 load() 拿到真实状态，再挑未签的账号逐个签。
     var todo = [];
-    for (var i = 0; i < state.rows.length; i++){
-      var r = state.rows[i];
-      if (!r.error && !r.checked_in) todo.push(r);
-    }
-    var total = todo.length;
     var idx = 0;
+    var total = 0;
+
+    function loadStates(){
+      return load(true).then(function(){
+        todo = [];
+        for (var i = 0; i < state.rows.length; i++){
+          var r = state.rows[i];
+          if (!r.error && !r.checked_in) todo.push(r);
+        }
+        total = todo.length;
+        return true;
+      });
+    }
 
     function step(){
       if (idx >= total) return Promise.resolve();
@@ -1473,8 +1507,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         });
     }
 
-    actShow(total ? ('准备签到，共 ' + total + ' 个待签账号…') : '账号都已是已签状态，检查奖励中…');
-    return step()
+    // 顺序：读状态 → 逐个签到 → 领任务奖励 → 抽奖 → 刷新列表
+    actShow('正在获取账号状态…');
+    return loadStates()
+      .then(function(){
+        actShow(total ? ('准备签到，共 ' + total + ' 个待签账号…') : '账号都已是已签状态，检查奖励…');
+        return step();
+      })
       .then(function(){
         // 签完立刻领 AiPy 任务奖励（签到会解锁部分任务）
         if (b) b.textContent = '领奖励…';
@@ -1533,7 +1572,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 之前写成 '+100' + '积分' 挤成「+100积分」，读起来别扭。
   function gainPart(v, unit){
     if (!v) return '';
-    return ' +' + fmt(v) + ' ' + (unit || '积分');
+    return ' +' + fmtGain(v) + ' ' + (unit || '积分');
   }
 
   // 把三步结果压成一句话：信息密度高，但不能长到被截断。
@@ -1764,42 +1803,27 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   /* ---------- 签到逻辑说明 ---------- */
-  // 用户的原话：「我到现在都没搞清楚你到底是怎么设计的」「谁前签谁后签、
-  // 还是没签、还是后台在签前台没刷新」。所以把这套机制原原本本写出来，
-  // 包括「为什么百度搭子天然就是已签」这种反直觉的点。
+  // 只说机制本身，不讲背景故事。用户原话：「只写你的签到逻辑就行了，
+  // 没必要写那么一大堆」。所以压成三条，一屏能看完。
   function openHelp(){
-    openSheet('签到是怎么跑的', '看一遍就明白，不用记。', function(body, close){
+    openSheet('签到逻辑', '三条，看完就清楚。', function(body, close){
       function para(title, text){
-        if (title) body.appendChild(el('div', 'sect-h', title));
+        body.appendChild(el('div', 'sect-h', title));
         var p = el('div', 'sheet-sub');
         p.style.margin = '0 0 14px';
         p.innerHTML = text;
         body.appendChild(p);
       }
-      para('① 打开 App 就自动签，不用你点',
-        '每次进入前台（冷启动、从后台切回来）都会跑一轮：' +
-        '<b>先查状态 → 再签未签的账号 → 最后刷新列表</b>。' +
-        '整个过程会显示在最上面那条提示里，比如「百度搭子 正在签到…（2/3）」，' +
-        '签完变绿写「完成 · 新签 2，已签 1」，几秒后自动收起。');
-      para('② 底部「签到」按钮是用来兜底的',
-        '自动签到如果因为网络抖动、cookie 快过期、平台风控失败了，' +
-        '那一个账号会停在「今日未签」，这时点它的「签到」按钮（或底部「一键签到」）重试。' +
-        '已经签过的账号不会再重复请求，点也不会多扣次数。');
-      para('③ 为什么百度搭子经常一打开就是「已签」',
-        '这家的每日积分是<b>你当天第一次打开百度搭子网页时就由平台自动发了</b>，' +
-        '服务器上早就记成「已发放」。我们看到的状态是真实的——不是我们替你签的，' +
-        '也不是判断错了。所以它有没有「+N 积分」取决于平台接口给不给具体数值，' +
-        '给就显示「今日已签 +500 积分」，不给就只写「今日已签」。');
-      para('④ 为什么其他平台要等几秒才变「已签」',
-        'aipy、WorkBuddy 这些必须由我们主动发签到请求才算，' +
-        '平台不会自动发。所以打开 App 的那一两秒它们显示「今日未签」，' +
-        '等自动签到跑完才变「今日已签 +N 灵石 / +N 积分」。' +
-        '这中间的等待就是顶部提示条在跑。');
-      para('⑤ 后台会偷偷签吗',
-        '不会。App 在后台被系统挂起后不做任何事（iOS 也不允许）。' +
-        '所以只有你打开 App 的那一刻才会签。App 回到前台时，' +
-        '如果离开超过 45 秒，会整页重建一次再自动签到——' +
-        '这一步是为了修掉「后台久了切回来显示读取失败」的问题。');
+      para('① 打开 App 自动签一次',
+        '打开就算一次完整的「一键签到」：' +
+        '<b>签到 → 领每日任务奖励 → 抽奖</b>，三件事一起做。' +
+        '进度显示在最上面那条提示里，比如「百度搭子 正在签到…（2/3）」。');
+      para('② 切后台回来不会签',
+        '回到前台只刷新列表，不发签到请求。' +
+        '想补签或重试，点底部「一键签到」，它和打开 App 做的事完全一样。');
+      para('③ 只处理「未签」的账号',
+        '已签的账号不会再发请求。百度搭子的每日积分由平台在你当天第一次访问时发放，' +
+        '所以我们看到它「已签」是真实状态。');
     });
   }
 
@@ -2324,11 +2348,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   /* ---------- 对外暴露给壳层：打开即签到 ---------- */
-  // 自动签到：壳层在「每次打开 App / 回到前台」调用一次。
-  // 只对未签账号发起签到，已签的完全不发请求（省流量、降低风控概率）。
-  // 幂等：并发调用直接返回同一个 Promise，避免 Android onResume 与页面
-  // visibilitychange 同时触发时发两轮请求（重复签到会被平台判为异常）。
-  var autoTask = null;
+  // 两个入口分工明确（0.5.5 起）：
+  //   __pointsAutoCheckin —— 冷启动专用：等同点一次「一键签到」（签到+领奖+抽奖）
+  //   __pointsRefresh     —— 回前台专用：只刷新列表，绝不签到
+  // 壳层负责区分「冷启动」和「回到前台」，页面侧再按调用名执行对应动作，
+  // 避免一次下午切十次后台就签十轮，把账号送进风控名单。
   var loginPendingAt = 0;
 
   // finishOAuth：WorkBuddy 这类 token 型平台，登录完成只是第一步，
@@ -2374,7 +2398,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 用户看到的是页面一直白屏闪。有了它，最坏情况是「一分钟重试一次」，
   // 期间界面还能正常显示错误和手动重试按钮。
   var RELOAD_KEY = 'last_reload_at';
-  function notifyReloadThrottled(){
+  function reloadThrottled(){
     var now = Date.now(), last = 0;
     try { last = Number(localStorage.getItem(RELOAD_KEY) || 0) || 0; } catch (e) {}
     if (now - last < 60000) return false;
@@ -2383,50 +2407,52 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     return true;
   }
 
-  function autoCheckin(allowReload){
+  // 启动自检（0.5.5 重构）
+  //
+  // 规则只有两条：
+  //   1. 只有「打开 App」这一个时刻会自动跑一遍完整的一键签到。
+  //      切后台回来、页面重新可见、bfcache 恢复——一律不签。
+  //      原因：这些时机会重复触发，一个下午切十次就发十轮请求，
+  //      容易把账号送进风控名单。要签请自己点底部按钮。
+  //   2. 页面被系统杀掉后重建（白屏/读取失败），允许自动 reload 一次。
+  //      这是自愈，不是签到，所以不受第 1 条限制。
+  var bootedAt = Date.now();
+  var BOOT_FRESH_MS = 40000;   // 超过这个时长还没读完状态，基本可以断定页面是死的
+  var autoTask = null;
+
+  // 冷启动：既查询又签到（走完整一键签到流程，与点按钮完全一致）
+  function bootAuto(){
     if (autoTask) return autoTask;
     actShow('正在获取账号状态…');
-    autoTask = load(true).then(function(ok){
-      if (!ok){
-        // iOS 后台回前台：WKWebView 的网络进程可能被系统回收，之后所有 fetch
-        // 都会持续失败，重试也救不回来。此时唯一出路是整页 reload，让 WebKit
-        // 重建网络栈。先写恢复标志，新页面加载后据此把自动签到续上。
-        if (allowReload){
-          if (notifyReloadThrottled()){
-            actShow('连接已断开，正在重建页面…');
-            try { localStorage.setItem('resume_checkin', '1'); } catch (err) {}
-          } else {
-            actErr('读取失败，请下拉刷新重试', 8000);
-          }
-        } else {
-          actErr('读取失败，请下拉刷新重试', 8000);
-        }
-        return false;
-      }
-      var need = false;
-      for (var i = 0; i < state.rows.length; i++){
-        var r = state.rows[i];
-        if (!r.error && !r.checked_in){ need = true; break; }
-      }
-      if (need && !state.busy){
-        // quiet：自动签到不弹 toast（用户没点按钮，弹窗很突兀），
-        // 进度全部走顶部活动条——这样「正在签 / 签完了」始终有反馈。
-        return checkinAll({ quiet: true }).then(function(){ return true; });
-      }
-      // 全部已签：明确告诉用户「这轮不用签」，而不是静悄悄什么都不显示
-      actDone('全部账号今日已签，无需操作', 2600);
-      return need;
-    }).then(function(v){
-      // 留一点冷却，避免刚结束又被下一次唤醒立刻触发
-      setTimeout(function(){ autoTask = null; }, 3000);
-      return v;
-    });
+    autoTask = checkinAll({ quiet: true })
+      .then(function(stat){
+        // 连第一屏都读不到：多半是页面进程已经废了，整页重建才有救
+        if (!stat && !state.rows.length){ reloadThrottled(); }
+        return stat;
+      })
+      .then(function(v){
+        setTimeout(function(){ autoTask = null; }, 3000);
+        return v;
+      }, function(){ autoTask = null; });
     return autoTask;
   }
-  // 壳层调用（打开 App / 回到前台）默认允许失败时整页重载；
-  // 页面自身的 visibilitychange 同理；只有 reload 后的续跑（resumeCheckin）
-  // 传 false，避免「失败 → reload → 又失败 → 又 reload」的死循环。
-  window.__pointsAutoCheckin = function(){ return autoCheckin(true); };
+
+  // 回前台：只刷新列表，绝不签到。读不到状态就重建页面（兜底自愈）。
+  function refreshOnResume(){
+    if (state.busy) return;
+    load(true).then(function(ok){
+      if (ok) return;
+      // 刚启动就失败 = 页面出生即残废（iOS 常见），直接重建
+      var age = Date.now() - bootedAt;
+      if (age < BOOT_FRESH_MS){
+        if (!reloadThrottled()) actErr('读取失败，请下拉刷新重试', 8000);
+      } else {
+        actErr('读取失败，请下拉刷新重试', 8000);
+      }
+    });
+  }
+  window.__pointsAutoCheckin = bootAuto;
+  window.__pointsRefresh = refreshOnResume;
 
   // notifyReload：通知壳层重建页面。优先走 PointsBridge（Android 已实现），
   // 没有桥时直接 location.reload() 兜底——iOS WKWebView 里整页 reload
@@ -2448,22 +2474,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
   applyView(readView());
   showSkeleton();
-  // 页面自己就发起「查询 → 自动签到」，不再等壳层来调。
-  // 之前只有壳层主动 evaluateJavascript 才签，万一那次注入被吞（页面还在加载、
-  // WebView 刚重建），就整轮都不签了，表现是「打开了但没签」。
-  // 现在两条路都留着，autoTask 会去重，不会重复签。
-  autoCheckin(true);
-  // reload 续跑：iOS 后台回前台时网络进程被回收，fetch 持续失败 → autoCheckin
-  // 写下 resume_checkin 标志后整页 reload。这里把上次没做完的自动签到续上。
-  // 传 false：这次如果再失败就只显示错误，绝不再 reload（防死循环）。
-  (function(){
-    var resume = '';
-    try { resume = localStorage.getItem('resume_checkin') || ''; } catch (e) {}
-    if (resume === '1'){
-      try { localStorage.removeItem('resume_checkin'); } catch (e) {}
-      setTimeout(function(){ autoCheckin(false); }, 800);
-    }
-  })();
+  // 打开 App 只跑这一次：等同于用户亲手点了一下「一键签到」，
+  // 签到 → 领任务奖励 → 抽奖 三件套一条龙，不是只签到。
+  // 之后切后台回来不再自动签，也不再自动签第二轮。
+  bootAuto();
   // 壳层在 WorkBuddy 登录后会 reload 本页，内存变量清零：
   // 从 localStorage 认出「上次是去登录 WorkBuddy」，把换取 token 的流程续上。
   (function(){
@@ -2474,15 +2488,17 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       finishOAuth('workbuddy');
     }
   })();
-  // 页面从后台回到前台时自动刷新 + 自动签到（用户「打开软件即签到」的核心诉求）
+  // 从后台回到前台：只刷新列表，不签到、不领奖。
+  // 用户明确要求「签到只在打开 App 时做一次」，切后台次数多了会黑号。
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState !== 'visible') return;
     resumeAfterLogin();
-    autoCheckin(true);
+    refreshOnResume();
   });
-  // bfcache 恢复（iOS 从登录页返回常见）：pageshow 的 persisted=true 时脚本不会重跑
+  // bfcache 恢复（iOS 从登录页返回常见）：pageshow 的 persisted=true 时脚本不会重跑，
+  // 所以这里要补一次刷新；但依然不签到。
   window.addEventListener('pageshow', function(e){
-    if (e.persisted) { resumeAfterLogin(); autoCheckin(true); }
+    if (e.persisted) { resumeAfterLogin(); refreshOnResume(); }
   });
 })();
 

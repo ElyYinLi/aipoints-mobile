@@ -38,6 +38,8 @@ struct ContentView: View {
     @State private var webView: WKWebView?
     /// 进入后台的时刻。用来判断「这次回来要不要整页重建」。
     @State private var awayAt: Date?
+    /// 本次进程是否已跑过启动签到。false = 冷启动，之后都算「回前台」。
+    @State private var bootChecked = false
 
     var body: some View {
         ZStack {
@@ -56,8 +58,9 @@ struct ContentView: View {
             }
         }
         .onAppear { engine.start() }
-        // 「打开软件即签到」：每次回到前台，只要还有未签账号就自动签一次。
-        // 用户明确不需要后台静默定时，这条就够了，且不触碰任何后台权限。
+        // 「打开软件即签到」：只有冷启动这一次会跑完整的一键签到。
+        // 0.5.5 起：切后台回来只刷新列表，不签到、不领奖——用户明确说过
+        // 「其他切后台等就不要自动签到和领奖了，这样容易黑号」。
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didEnterBackgroundNotification)) { _ in
             awayAt = Date()
@@ -66,19 +69,50 @@ struct ContentView: View {
             for: UIApplication.didBecomeActiveNotification)) { _ in
             let away = awayAt.map { Date().timeIntervalSince($0) } ?? 0
             awayAt = nil
-            // 关键修复（0.5.4）：iOS 在后台待久了会回收 WKWebView 的 WebContent
-            // 进程，回来时 JS 上下文已经没了——此时 evaluateJavaScript 打进去
-            // 没有任何反应，页面上的 fetch 也全部失败，表现就是「读取失败」，
-            // 下拉刷新都救不回来（因为整个页面进程是死的）。
-            // 唯一可靠的做法是整页 reload，让 WebKit 重建 WebContent 进程。
-            // 45 秒是经验阈值：短时间切换（比如回个消息）不必重建，避免白屏。
-            if away > 45, let web = webView, web.url != nil {
-                web.reload()
-            } else {
-                webView?.evaluateJavaScript(
+            guard let web = webView, web.url != nil else { return }
+
+            if !bootChecked {
+                // 冷启动：页面自己也会跑（autoTask 去重），这里只兜一手
+                bootChecked = true
+                web.evaluateJavaScript(
                     "window.__pointsAutoCheckin && window.__pointsAutoCheckin()",
                     completionHandler: nil)
+                return
             }
+
+            // 关键修复：iOS 在后台待久了会回收 WKWebView 的 WebContent 进程，
+            // 回来时 JS 上下文已经没了——evaluateJavaScript 没反应，页面 fetch
+            // 全失败，下拉刷新也救不回来（整个进程是死的）。
+            // 之前只在 >45s 时 reload，但系统回收不挑时间，而且 reload() 可能
+            // 复用同一个坏进程（用户：「点击重新加载没用，只能杀掉 App 重开」）。
+            // 现在：先探活，再决定要不要整页重建。
+            if away > 45 {
+                web.reloadFromBlank()
+                return
+            }
+            var decided = false
+            // 兜底：evaluateJavaScript 偶发丢回调，2.5 秒后自己查一次 DOM
+            let grace = {
+                guard !decided else { return }
+                decided = true
+                web.evaluateJavaScript(
+                    "document.querySelectorAll('.card,.row').length > 0 ? 'ok' : 'empty'",
+                    completionHandler: { v, _ in
+                        let r = (v as? String) ?? ""
+                        if !r.contains("ok") { web.reloadFromBlank() }
+                    })
+            }
+            web.evaluateJavaScript(
+                "window.__pointsRefresh ? (window.__pointsRefresh(), 'alive') : 'dead'",
+                completionHandler: { value, _ in
+                    let s = (value as? String) ?? ""
+                    if !s.contains("alive") {
+                        // 明确 'dead'：上下文没了，直接重建
+                        if !decided { decided = true; web.reloadFromBlank() }
+                        return
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: grace)
+                })
         }
         .fullScreenCover(item: Binding(
             get: { login.pendingProvider.map(LoginTarget.init) },
@@ -97,7 +131,7 @@ struct ContentView: View {
                     webView?.evaluateJavaScript(
                         "try{localStorage.removeItem('oauth_pending')}catch(e){}", completionHandler: nil)
                 }
-                webView?.reload()
+                webView?.reloadFromBlank()
             }
         }
     }
@@ -369,5 +403,22 @@ final class PickerDelegate: NSObject, UIDocumentPickerDelegate {
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         completion("")
+    }
+}
+
+extension WKWebView {
+    /// 整页重建：先跳到 about:blank 再回面板。
+    ///
+    /// 为什么不直接 reload()：当 WebContent 进程已经被系统回收时，reload
+    /// 有时会复用同一个坏掉的进程，页面依旧白屏/读取失败（用户实测：
+    /// 「点击重新加载没用，只能杀掉 App 重开」）。先载入空白页会强制 WebKit
+    /// 换一个新的进程，再把面板载进去，这个才是真的重建。
+    func reloadFromBlank() {
+        let back = url
+        load(URLRequest(url: URL(string: "about:blank")!))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            if let back { self.load(URLRequest(url: back)) }
+        }
     }
 }

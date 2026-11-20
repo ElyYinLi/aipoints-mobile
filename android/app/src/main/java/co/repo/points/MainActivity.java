@@ -35,8 +35,8 @@ public final class MainActivity extends Activity {
 
     private WebView web;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    /** 首次进入前台时自动签到一次；从登录页返回时不重复触发。 */
-    private boolean autoCheckinOnResume = false;
+    /** 本次进程是否已经跑过启动签到。false = 冷启动，true = 之后都算「回前台」。 */
+    private boolean bootChecked = false;
     /** 进入后台的时刻（毫秒）。用来判断「这次回来要不要整页重建」。 */
     private long awayAt = 0;
 
@@ -92,9 +92,8 @@ public final class MainActivity extends Activity {
 
         waitThenLoad(0);
 
-        // 「打开软件即签到」：进前台就自动跑一次，不依赖任何后台服务或定时器。
-        // 用户明确说过：不需要静默准点，我自己会定时开 App。这就是最贴合的实现。
-        autoCheckinOnResume = true;
+        // 冷启动签到在首次 onResume 里触发（bootChecked 为 false 时），
+        // 不依赖任何后台服务或定时器。之后回到前台只刷新，不再签。
 
         // 前台服务：让定时签到在息屏后仍有机会触发
         CheckinService.start(this);
@@ -325,22 +324,75 @@ public final class MainActivity extends Activity {
         if (web == null) return;
         long away = (awayAt > 0) ? (System.currentTimeMillis() - awayAt) : 0;
         awayAt = 0;
-        // 与 iOS 同样的判断：后台待久了 WebView 的 renderer 进程可能被系统回收，
-        // 此时 evaluateJavascript 打进去没有反应，页面上的 fetch 也全部失败。
-        // 整页 reload 才能让内核查重新建渲染进程——这也是用户反馈
-        // 「iOS/Android 后台久了切回来读取失败」的真正解法。
-        if (away > 45000) {
-            web.reload();
+
+        // 0.5.5：把「冷启动」和「回前台」彻底分开。
+        //
+        // 冷启动 → 跑一次完整的一键签到（签到 + 领任务奖励 + 抽奖）。
+        // 回前台 → 只刷新列表，不发任何写请求。
+        //   用户原话：「其他切后台等就不要自动签到和领奖了，这样容易黑号」。
+        //   一个下午切十次就签十轮，风控必中。
+        if (!bootChecked) {
+            bootChecked = true;
+            // 页面自己启动时也会跑（不依赖这次注入），autoTask 会去重
+            ui.postDelayed(() -> web.evaluateJavascript(
+                    "window.__pointsAutoCheckin && window.__pointsAutoCheckin()", null), 600);
             return;
         }
-        if (autoCheckinOnResume) {
-            // 每次回前台都触发一轮「查询 → 自动签到」。
-            // 之前只在首次为 true，靠页面的 visibilitychange 兜——但 WebView
-            // 的 visibility 事件在部分机型上不可靠，漏一次就整轮不签。
-            // 页面侧 autoTask 会去重、并有 3 秒冷却，重复调用没有副作用。
-            ui.postDelayed(() -> web.evaluateJavascript(
-                    "window.__pointsAutoCheckin && window.__pointsAutoCheckin()", null), 900);
+
+        // 后台待久了渲染进程会被系统回收，此时 evaluateJavascript 毫无反应、
+        // 页面上的 fetch 也全失败，整页 reload 是唯一出路。
+        // 之前只在 >45s 时重建，但系统回收并不挑时间（实测 30 秒就可能死），
+        // 所以现在不看时间，一律先探活：探不到就重建。探测本身很便宜。
+        if (away > 45000) {
+            rebuild();
+            return;
         }
+        ui.postDelayed(this::refreshOrRebuild, 400);
+    }
+
+    /**
+     * 回前台的轻量自愈：能读到引擎就只刷新列表，读不到就整页重建。
+     *
+     * 之前「读取失败」的页面点重新加载也没用——因为那次只是页面里的 fetch
+     * 又跑了一遍，而渲染进程已经废了，怎么请求都失败。必须换掉整个 WebView 页面。
+     */
+    private void refreshOrRebuild() {
+        final WebView v = web;
+        if (v == null) return;
+        final boolean[] done = {false};
+        // 注入没反应也不能立刻判死：WebView 里 evaluateJavascript 偶发丢回调，
+        // 之前「点重新加载没反应」的局面里，有一部分就是被这种误判+无效reload搞出来的。
+        // 给 2.5 秒兜底：这段时间内页面自己把列表画出来就算活着，什么都不做。
+        final Runnable grace = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            v.evaluateJavascript(
+                    "document.querySelectorAll('.card,.row').length > 0 ? 'ok' : 'empty'",
+                    r -> { if (r == null || !r.contains("ok")) rebuild(); });
+        };
+        ui.postDelayed(grace, 2500);
+        // 先让页面自己刷新（正常路径，最快）
+        v.evaluateJavascript(
+                "window.__pointsRefresh ? (window.__pointsRefresh(), 'alive') : 'dead'", value -> {
+                    boolean alive = value != null && value.contains("alive");
+                    if (!alive && value != null) {
+                        // 明确拿到 'dead'：页面上下文确实没了，不用等了
+                        if (!done[0]) { done[0] = true; rebuild(); }
+                        return;
+                    }
+                    // 'alive'，回调丢了也不慌：立刻裁决一次，没内容就等 2.5 秒后的兜底
+                    ui.post(grace);
+                });
+    }
+
+    /** 整页重建：先 about:blank 再回面板，确保渲染进程真的换了新的。 */
+    private void rebuild() {
+        if (web == null) return;
+        // 直接 reload 有时会复用同一个已损坏的渲染进程，先清空再载入才可靠
+        web.loadUrl("about:blank");
+        ui.postDelayed(() -> {
+            if (web != null) web.loadUrl(URL_BASE + "/");
+        }, 120);
     }
 
     @Override
@@ -379,7 +431,7 @@ public final class MainActivity extends Activity {
                 // 取消：清掉 OAuth 待办标记，避免 reload 后白白轮询 60 秒
                 web.evaluateJavascript("try{localStorage.removeItem('oauth_pending')}catch(e){}", null);
             }
-            web.reload();
+            rebuild();
         }
     }
 
