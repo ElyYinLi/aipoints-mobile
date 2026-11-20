@@ -33,10 +33,11 @@ func iconSVG(name string) string {
 		"coin":  `<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 9.8h3.8a1.9 1.9 0 0 1 0 3.8H9.5"/>`,
 		// 任务清单 + 对勾
 		"task": `<rect x="4" y="3.5" width="15" height="15" rx="3"/><path d="M8.5 12l2.5 2.5 5-5.5"/>`,
-		// 主题三态
+		// 主题两态（跟随系统已移除）
 		"sun":  `<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5M18.6 18.6l-1.5-1.5M6.9 6.9L5.4 5.4"/>`,
 		"moon": `<path d="M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8z"/>`,
-		"auto": `<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>`,
+		// 说明：圆圈 + 小写 i
+		"info": `<circle cx="12" cy="12" r="8.6"/><path d="M12 10.6v6"/><circle cx="12" cy="7.6" r="1" fill="currentColor" stroke="none"/>`,
 		// 视图密度：list = 三行条目 / grid = 四格平铺
 		"list": `<path d="M8 6.5h12M8 12h12M8 17.5h12"/>
 		         <circle cx="4" cy="6.5" r="1.1" fill="currentColor" stroke="none"/>

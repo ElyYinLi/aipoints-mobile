@@ -47,3 +47,33 @@ func TestGainMemoPersists(t *testing.T) {
 		t.Fatalf("重启后应读到 100，实际 %v", got)
 	}
 }
+
+// TestGainMemoFreshFlag 「本次进程签的」和「磁盘读回来的」必须能区分。
+//
+// 这条区分决定了能不能纠正平台状态：
+//   - fresh 的（本次进程亲手签下）→ 可以纠正 WorkBuddy 那种「签完仍报未签」
+//   - 磁盘恢复的 → 只能补数值，不能改状态，否则平台说未签也会被改成已签，
+//     结果是前端认为不用签，永远不去签到（0.5.4 修的真实 bug）
+func TestGainMemoFreshFlag(t *testing.T) {
+	dir := t.TempDir()
+	m := newGainMemo(dir)
+	m.Set("workbuddy", "b1", 100)
+	if !m.Fresh("workbuddy", "b1") {
+		t.Fatal("刚 Set 的条目必须是 fresh")
+	}
+
+	// 模拟重启：新实例从磁盘读到同一条，但不再是本次进程签的
+	again := newGainMemo(dir)
+	if got := again.Get("workbuddy", "b1"); got != 100 {
+		t.Fatalf("数值应保留，实际 %v", got)
+	}
+	if again.Fresh("workbuddy", "b1") {
+		t.Fatal("磁盘恢复的条目不能标记为 fresh——会误改平台状态")
+	}
+
+	// 清零时 fresh 也要一起清掉，避免残留标记
+	m.Set("workbuddy", "b1", 0)
+	if m.Fresh("workbuddy", "b1") {
+		t.Fatal("清零后不应还是 fresh")
+	}
+}

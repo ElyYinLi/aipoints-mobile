@@ -37,6 +37,8 @@ public final class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     /** 首次进入前台时自动签到一次；从登录页返回时不重复触发。 */
     private boolean autoCheckinOnResume = false;
+    /** 进入后台的时刻（毫秒）。用来判断「这次回来要不要整页重建」。 */
+    private long awayAt = 0;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -83,11 +85,8 @@ public final class MainActivity extends Activity {
         web.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int p) {
-                if (p == 100) {
-                    pushSystemDark();
-                    view.evaluateJavascript(
-                            "window.__pointsTheme || ''", value -> applySystemBarTheme(value));
-                }
+                if (p == 100) view.evaluateJavascript(
+                        "window.__pointsTheme || 'dark'", value -> applySystemBarTheme(value));
             }
         });
 
@@ -137,7 +136,11 @@ public final class MainActivity extends Activity {
      * Theme.DeviceDefault.Light 给了深色图标，切到深色主题后就「看不清」了。
      */
     private void applySystemBarTheme(String theme) {
-        boolean dark = "dark".equals(theme);
+        // evaluateJavascript 的回调值是 JSON 字面量，字符串会带一对引号
+        // （传 "dark" 回来的是 "\"dark\""）。不剥掉引号，"dark".equals(...)
+        // 永远为 false，状态栏图标就一直是浅色底配白字，看不清。
+        String t = (theme == null) ? "" : theme.replace("\"", "").trim();
+        boolean dark = "dark".equals(t);
         android.view.Window w = getWindow();
         android.view.View v = w.getDecorView();
         int flags = v.getSystemUiVisibility();
@@ -163,39 +166,6 @@ public final class MainActivity extends Activity {
                     | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
             v.setSystemUiVisibility(flags);
         }
-    }
-
-    /**
-     * 系统当前是否深色，用 Configuration.uiMode 这个「权威值」判断。
-     *
-     * 为什么不用 prefers-color-scheme：实测多台机型上 Android WebView 的
-     * 该媒体查询恒为 light（内核版本 / ROM 差异），于是页面「跟随系统」永远浅色，
-     * 用户在系统里切了深色也不跟。uiMode 是系统自己维护的配置，跟着系统设置走，
-     * 没有 WebView 内核的坑。
-     */
-    private boolean isSystemDark() {
-        int mode = getResources().getConfiguration().uiMode
-                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-        return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-    }
-
-    /** 把系统的真实明暗推给页面，供「跟随系统」使用。 */
-    private void pushSystemDark() {
-        if (web == null) return;
-        web.evaluateJavascript(
-                "window.__pointsOnSystemTheme && window.__pointsOnSystemTheme("
-                        + (isSystemDark() ? "true" : "false") + ")", null);
-    }
-
-    /**
-     * 系统深浅色变化时系统会重建/通知 Activity，这里是唯一可靠的回调。
-     * 之前完全没接，页面里 matchMedia 的 change 事件在 WebView 上也常常不触发，
-     * 结果就是「跟随系统」只在冷启动那一次生效。
-     */
-    @Override
-    public void onConfigurationChanged(android.content.res.Configuration cfg) {
-        super.onConfigurationChanged(cfg);
-        pushSystemDark();
     }
 
     /** 轮询本机面板端口，就绪后加载。最多等 3 秒。 */
@@ -352,13 +322,31 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (autoCheckinOnResume && web != null) {
-            autoCheckinOnResume = false;
-            // 交给页面自己的逻辑：它会先查余额，只对未签的账号发起签到，
-            // 已签的不会重复请求（省流量也降低风控概率）。
+        if (web == null) return;
+        long away = (awayAt > 0) ? (System.currentTimeMillis() - awayAt) : 0;
+        awayAt = 0;
+        // 与 iOS 同样的判断：后台待久了 WebView 的 renderer 进程可能被系统回收，
+        // 此时 evaluateJavascript 打进去没有反应，页面上的 fetch 也全部失败。
+        // 整页 reload 才能让内核查重新建渲染进程——这也是用户反馈
+        // 「iOS/Android 后台久了切回来读取失败」的真正解法。
+        if (away > 45000) {
+            web.reload();
+            return;
+        }
+        if (autoCheckinOnResume) {
+            // 每次回前台都触发一轮「查询 → 自动签到」。
+            // 之前只在首次为 true，靠页面的 visibilitychange 兜——但 WebView
+            // 的 visibility 事件在部分机型上不可靠，漏一次就整轮不签。
+            // 页面侧 autoTask 会去重、并有 3 秒冷却，重复调用没有副作用。
             ui.postDelayed(() -> web.evaluateJavascript(
                     "window.__pointsAutoCheckin && window.__pointsAutoCheckin()", null), 900);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        awayAt = System.currentTimeMillis();
     }
 
     @Override

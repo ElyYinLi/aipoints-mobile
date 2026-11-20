@@ -266,10 +266,14 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// 兜底：平台没给 today_gain 时用本地记住的值补上，
 	// 否则状态行只能显示「今日已签」，看不到拿了多少。
 	//
-	// 这里**不要求** CheckedIn 为真：部分平台（WorkBuddy 实测）签完之后状态接口
-	// 仍回 checked_in=false，但我们已经拿到并记下了本次收益。既然今天确实领到过，
-	// 就该显示「今日已签 +100 积分」——否则用户看到的是「签到成功」toast 配
-	// 「今日未签到」状态行，前后矛盾。
+	// 关于「能不能顺手纠正状态」——这里有个必须守住的边界（0.5.4 修复）：
+	//   - memo 是**本次进程亲手签下**的（Fresh）：可以纠正。WorkBuddy 实测
+	//     签完后状态接口仍回 checked_in=false，不纠正就会出现「签到成功」toast
+	//     配「今日未签到」状态行，前后矛盾。
+	//   - memo 只是从磁盘读回来的旧记录：**绝不能改状态**。之前无条件
+	//     `CheckedIn = true`，导致平台明确说「未签」的账号被强行改成「已签」，
+	//     于是前端认为不需要签，永远不发起签到——用户看到的就是「签没签都显示
+	//     同一个状态」，还以为是软件坏了。
 	for i := range out {
 		if out[i].Error != "" {
 			continue
@@ -282,9 +286,14 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if out[i].TodayGain > 0 {
 			continue
 		}
-		if g := s.gains.Get(out[i].Provider, out[i].AccountID); g > 0 {
-			out[i].TodayGain = g
-			// 有今日收益即说明今天已经领过，顺带纠正状态
+		g := s.gains.Get(out[i].Provider, out[i].AccountID)
+		if g <= 0 {
+			continue
+		}
+		// 数值可以补（平台不给具体数时用来显示 +N）
+		out[i].TodayGain = g
+		// 状态只有在「本条 memo 是本次进程签下的」时才允许纠正
+		if !out[i].CheckedIn && s.gains.Fresh(out[i].Provider, out[i].AccountID) {
 			out[i].CheckedIn = true
 			if out[i].Detail == "" || out[i].Detail == "今日未签到" {
 				out[i].Detail = "今日已签"

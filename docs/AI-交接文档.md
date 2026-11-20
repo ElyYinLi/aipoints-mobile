@@ -264,6 +264,89 @@ INIT = """const o=window.matchMedia;window.matchMedia=function(q){
 然后只调 `window.__pointsOnSystemTheme(true/false)`，看 `data-theme` 是否跟着变。
 只测「正常浏览器切 color_scheme」是测不出这个 bug 的——真实机型就是坏的。
 
+> **0.5.4 更新**：这套「跟随系统」已经**整个删除**。改了三版仍然不可靠，
+> 用户明确要求「就一个浅色一个深色」。现在 `THEMES = ['light','dark']`，
+> 默认深色，历史值 `system` 在读的时候会被改写成 `dark`。
+> 上面 3.19 的内容仅作历史记录，**不要再照着它加回系统跟随**。
+
+### 3.21 「今日已签 +？」——拿不到数值时的显示
+
+0.5.3 为了「一定显示数字」用了 `+?` 占位，用户评价是「很搞笑」。
+现在的规则（`TestIndexDetailTextGainRule` 守着）：
+
+- 有 `today_gain` → `今日已签 +N 单位`
+- 没有 → `今日已签`（干净收尾）
+
+教训：**宁可少显示，也不要用占位符暴露「我拿不到数据」**。
+用户看到 `?` 只会觉得软件坏了，而不是觉得平台没给。
+
+### 3.22 签到过程必须可见（0.5.4）
+
+原来的实现是前端一次 `POST /api/checkin`，后端串行签全部账号。
+问题是**中间过程完全没有反馈**：用户打开 App 看到「未签」，几秒后变「已签」，
+不知道是自动签的、还是自己之前点的、还是根本没签。用户的质疑原话：
+
+> 「我都不知道你这个逻辑到底是谁前签，还是谁后签，还是没签，
+>   还是你后台在签，然后前台没显示刷新出来。」
+
+现在的做法：
+
+1. 前端**逐个账号** `POST /api/checkin?account=xxx`，串行 + 250ms 间隔（保留防风控）
+2. 每步写顶部活动条 `#act`：
+   - `百度搭子 正在签到…（2/3）`
+   - `百度搭子 签到成功，+500 积分`
+   - `正在刷新列表…`
+   - `完成 · 新签 2，已签 1`（绿色 4 秒后自动收起）
+   - 失败转红：`完成 · 新签 0，失败 1（有失败，可下拉刷新重试）`
+3. 自动签到（`checkinAll({quiet:true})`）走同一套进度，不弹 toast
+4. 页面启动自己就调 `autoCheckin(true)`，不再只依赖壳层注入
+   （壳层注入可能因为页面未加载完而丢失）
+5. 统计条右侧加 `ⓘ` 说明入口（`openHelp()`），用大白话解释五个问题：
+   自动签、按钮是兜底、百度搭子为什么天然已签、其他平台为什么慢半拍、后台不偷偷签
+
+> 反面断言在 `TestIndexCheckinShowsProgress` 里：谁改回批量接口，测试就红。
+
+### 3.23 iOS/Android 后台久了「读取失败」的真正原因
+
+不是网络问题，是**渲染进程被系统回收**：
+
+- iOS 后台一段时间后回收 WKWebView 的 WebContent 进程
+- Android 同样会回收 WebView renderer
+
+进程死了以后，`evaluateJavaScript` 打进去没有任何反应，页面里的 `fetch`
+也全部失败——**下拉刷新救不回来**，因为整个页面进程是死的。
+
+两处修复（必须同时有）：
+
+1. **壳层**（`PointsApp.swift` / `MainActivity.java`）
+   - 记录进入后台的时刻
+   - 回前台时若离开 > 45 秒 → 直接 `reload()` / `web.reload()`
+   - 短时间切换不重建，避免白屏
+2. **页面**（`notifyReloadThrottled()`）
+   - fetch 连续失败 → 整页 reload，让 WebKit 重建网络栈
+   - **60 秒内只允许一次**，否则「失败→reload→又失败→又 reload」会死循环
+   - 用 `last_reload_at` 落 localStorage，跨 reload 依然有效
+
+### 3.24 面板内联 JS 的语法闸门
+
+模板是一个上千行的 `const indexTmpl = \`...\`` 字符串，**Go 编译器看不见里面的 JS**。
+0.5.4 开发中出现过「加函数时误删 `function doCheckin(...)` 的函数头」，
+结果是整页白屏（`Unexpected token 'function'`），而 `go test ./...` 全绿——
+因为测试只做字符串包含断言。
+
+现在 CI 里有 `面板内联 JS 语法检查` 步骤：
+
+```
+go build → 起临时实例 → curl 首页 → tools/check_panel_js.py → node --check
+```
+
+本地也能跑：
+
+```bash
+curl -s http://127.0.0.1:7979/ -o /tmp/page.html
+python3 tools/check_panel_js.py /tmp/page.html
+```
+
 ---
 
 ## 4. 各平台实现要点

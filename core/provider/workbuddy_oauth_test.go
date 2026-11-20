@@ -96,8 +96,13 @@ func TestAiPyNotCheckedInDetail(t *testing.T) {
 	if snap.CheckedIn {
 		t.Fatal("应为未签到")
 	}
-	if !strings.Contains(snap.Detail, "今日可得") || !strings.Contains(snap.Detail, "4 灵石") {
-		t.Fatalf("未签文案不符: %q", snap.Detail)
+	// 未签也走统一口径：数值放 TodayGain，文案由面板 detailText() 拼成
+	// 「今日未签 · 可得 +N 灵石」。provider 不再自己拼带单位的字符串。
+	if snap.TodayGain != 4 {
+		t.Fatalf("未签时 today_gain 应为 4 灵石，实际 %v（Detail=%q）", snap.TodayGain, snap.Detail)
+	}
+	if snap.Detail != "今日未签到" {
+		t.Fatalf("未签状态文案应为「今日未签到」，实际 %q", snap.Detail)
 	}
 	if snap.Balance != 100 {
 		t.Fatalf("余额应为 100 灵石，实际 %v", snap.Balance)

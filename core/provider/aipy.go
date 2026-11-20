@@ -149,7 +149,10 @@ func (a *AiPy) Query(ctx context.Context, c Credential) (Snapshot, error) {
 	case !canSign:
 		snap.Detail = "今日暂不可签（" + aipyBlockReason(data) + "）"
 	case todayReward > 0:
-		snap.Detail = "今日可得 " + fmtNum(todayReward/aipyQuotaPerStone) + " 灵石"
+		// 未签但平台已告知今日奖励：填数值，文案交给 detailText() 统一拼成
+		// 「今日未签 · 可得 +N 灵石」，与已签状态保持同一口径。
+		snap.TodayGain = todayReward / aipyQuotaPerStone
+		snap.Detail = "今日未签到"
 	default:
 		snap.Detail = "今日未签到"
 	}

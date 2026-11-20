@@ -24,6 +24,11 @@ type gainMemo struct {
 	mu   sync.Mutex
 	path string
 	data map[string]memoEntry
+	// fresh 记录「本次进程运行期间亲手签下」的条目。
+	// 只有 fresh 的才能用来纠正平台返回的未签状态（WorkBuddy 签完仍回 false 那种），
+	// 从磁盘恢复的旧条目只能用来补数值，不能改状态——否则会把「平台说未签」
+	// 强行改成已签，结果是永远不去签。
+	fresh map[string]bool
 }
 
 type memoEntry struct {
@@ -32,7 +37,11 @@ type memoEntry struct {
 }
 
 func newGainMemo(dir string) *gainMemo {
-	m := &gainMemo{path: filepath.Join(dir, "gain_memo.json"), data: map[string]memoEntry{}}
+	m := &gainMemo{
+		path:  filepath.Join(dir, "gain_memo.json"),
+		data:  map[string]memoEntry{},
+		fresh: map[string]bool{},
+	}
 	if b, err := os.ReadFile(m.path); err == nil {
 		_ = json.Unmarshal(b, &m.data)
 	}
@@ -54,8 +63,10 @@ func (m *gainMemo) Set(providerID, accountID string, gain float64) {
 	m.mu.Lock()
 	if gain <= 0 {
 		delete(m.data, k)
+		delete(m.fresh, k)
 	} else {
 		m.data[k] = memoEntry{Date: today, Gain: gain}
+		m.fresh[k] = true
 	}
 	snapshot := make(map[string]memoEntry, len(m.data))
 	for kk, vv := range m.data {
@@ -86,4 +97,15 @@ func (m *gainMemo) Get(providerID, accountID string) float64 {
 		return 0
 	}
 	return e.Gain
+}
+
+// Fresh 表示这条记录是本次进程运行期间签下来的。
+// 查询回填时用它决定「能不能纠正平台给的状态」——见 panel.go 的说明。
+func (m *gainMemo) Fresh(providerID, accountID string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fresh[memoKey(providerID, accountID)]
 }

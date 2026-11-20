@@ -36,6 +36,8 @@ struct ContentView: View {
     @EnvironmentObject var engine: Engine
     @ObservedObject private var login = LoginCoordinator.shared
     @State private var webView: WKWebView?
+    /// 进入后台的时刻。用来判断「这次回来要不要整页重建」。
+    @State private var awayAt: Date?
 
     var body: some View {
         ZStack {
@@ -57,9 +59,26 @@ struct ContentView: View {
         // 「打开软件即签到」：每次回到前台，只要还有未签账号就自动签一次。
         // 用户明确不需要后台静默定时，这条就够了，且不触碰任何后台权限。
         .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didEnterBackgroundNotification)) { _ in
+            awayAt = Date()
+        }
+        .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didBecomeActiveNotification)) { _ in
-            webView?.evaluateJavaScript(
-                "window.__pointsAutoCheckin && window.__pointsAutoCheckin()", completionHandler: nil)
+            let away = awayAt.map { Date().timeIntervalSince($0) } ?? 0
+            awayAt = nil
+            // 关键修复（0.5.4）：iOS 在后台待久了会回收 WKWebView 的 WebContent
+            // 进程，回来时 JS 上下文已经没了——此时 evaluateJavaScript 打进去
+            // 没有任何反应，页面上的 fetch 也全部失败，表现就是「读取失败」，
+            // 下拉刷新都救不回来（因为整个页面进程是死的）。
+            // 唯一可靠的做法是整页 reload，让 WebKit 重建 WebContent 进程。
+            // 45 秒是经验阈值：短时间切换（比如回个消息）不必重建，避免白屏。
+            if away > 45, let web = webView, web.url != nil {
+                web.reload()
+            } else {
+                webView?.evaluateJavaScript(
+                    "window.__pointsAutoCheckin && window.__pointsAutoCheckin()",
+                    completionHandler: nil)
+            }
         }
         .fullScreenCover(item: Binding(
             get: { login.pendingProvider.map(LoginTarget.init) },

@@ -28,6 +28,21 @@ jobs:
       - name: 单元测试
         working-directory: core
         run: go test -race -cover ./...
+      # 面板是一个上千行的内联 <script>，Go 编译器完全看不见它。
+      # 曾经出现过「改模板时误删一个函数头」→ 整页 JS 语法错误 → 白屏，
+      # 而所有 Go 测试仍然绿。这里把内联脚本抽出来交给 node 做真正的语法检查。
+      - name: 面板内联 JS 语法检查
+        run: |
+          go build -o /tmp/pointsctl ./core/cmd/pointsctl
+          /tmp/pointsctl -action serve -addr 127.0.0.1:7899 -dir /tmp/ci-data &
+          SRV=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:7899/api/health > /dev/null; then break; fi
+            sleep 0.3
+          done
+          curl -sf http://127.0.0.1:7899/ -o /tmp/page.html
+          kill $SRV 2>/dev/null || true
+          python3 tools/check_panel_js.py /tmp/page.html
       - name: 构建 CLI
         working-directory: core
         run: go build -o /tmp/pointsctl ./cmd/pointsctl && /tmp/pointsctl -action providers

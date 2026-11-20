@@ -16,8 +16,7 @@ const indexTmpl = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#FBF8FF" media="(prefers-color-scheme:light)">
-<meta name="theme-color" content="#141218" media="(prefers-color-scheme:dark)">
+<meta name="theme-color" content="#141218">
 <title>积分矩阵</title>
 <style>
 /* ---------- 设计令牌（Material 3 tonal palette） ---------- */
@@ -37,24 +36,10 @@ const indexTmpl = `<!DOCTYPE html>
   --hair:rgba(128,128,150,.16);
   --sat:env(safe-area-inset-top); --sab:env(safe-area-inset-bottom);
 }
-/* 只在「没有任何 data-theme 属性」时才靠媒体查询兜底（JS 未执行/被禁用）。
-   JS 正常运行时 system 模式会显式写 data-theme="dark"，走下面那条规则——
-   因为 Android WebView 的 prefers-color-scheme 不可靠，不能只依赖它。 */
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme]){
-    --primary:#BAC3FF; --on-primary:#1B2270;
-    --primary-c:#343D8C; --on-primary-c:#DEE0FF;
-    --surface:#141218; --surface-1:#1D1B22; --surface-2:#232128; --surface-3:#2B2833;
-    --card:#1F1D25; --on-surface:#E6E1E9; --on-surface-v:#A8A4B4;
-    --outline:#474452; --outline-v:#332F3C;
-    --ok:#7FD9B0; --ok-c:#12452F;
-    --warn:#F5C25B; --warn-c:#4A3708;
-    --bad:#FFB4AB; --bad-c:#5C1410;
-    --shadow:0 1px 2px rgba(0,0,0,.35),0 4px 16px rgba(0,0,0,.28);
-    --shadow-lg:0 10px 32px rgba(0,0,0,.55);
-  }
-}
-/* 手动切到暗色：与系统偏好无关，优先级更高 */
+/* 深色令牌：只由 data-theme 决定。
+   已经删掉 prefers-color-scheme 兜底——Android WebView 上它不可靠，
+   「跟随系统」这个选项本身也已从 UI 移除。 */
+/* data-theme=dark：唯一决定深色的开关 */
 :root[data-theme="dark"]{
   --primary:#BAC3FF; --on-primary:#1B2270;
   --primary-c:#343D8C; --on-primary-c:#DEE0FF;
@@ -107,6 +92,30 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
 .iconbtn:active{background:var(--surface-3);color:var(--on-surface)}
 .iconbtn.spin svg{animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- 活动条（签到进度） ---------- */
+/* 贴在 appbar 和汇总区之间，不占常规布局高度（默认 display:none）。
+   三态：进行中（主色 + 呼吸点）/ 完成（绿）/ 失败（红）。 */
+.act{
+  display:none;align-items:center;gap:9px;
+  margin:10px 18px 0;padding:10px 14px;
+  border-radius:var(--r-md);
+  background:var(--primary-c);color:var(--on-primary-c);
+  font-size:13px;line-height:1.35;font-weight:500;
+  animation:actIn .22s ease;
+}
+.act.on{display:flex}
+.act.done{background:var(--ok-c);color:var(--ok)}
+.act.err{background:var(--bad-c);color:var(--bad)}
+.act-dot{
+  width:8px;height:8px;border-radius:50%;flex:0 0 auto;
+  background:var(--primary);animation:pulse 1.1s ease-in-out infinite;
+}
+.act.done .act-dot{background:var(--ok);animation:none}
+.act.err .act-dot{background:var(--bad);animation:none}
+.act-txt{flex:1;min-width:0}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.82)}}
+@keyframes actIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 
 /* ---------- 汇总卡 ---------- */
 .hero{padding:14px 18px 6px}
@@ -518,6 +527,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   <button class="iconbtn" id="btnSettings" aria-label="设置">{{ICON:gear}}</button>
 </div>
 
+<!-- 活动条：把「后台正在做什么」明明白白写在最上面。
+     用户的原话：「我都不知道状态」「谁前签谁后签、还是没签、还是后台在签前台没刷新」。
+     所以签到的每一步都往这里写一行，做完转绿、失败转红，然后自动收起。 -->
+<div class="act" id="act">
+  <span class="act-dot"></span>
+  <span class="act-txt" id="actTxt"></span>
+</div>
+
 <div class="hero">
   <div class="hero-head" id="hero-head">
     <div class="kicker">全部账号合计</div>
@@ -527,6 +544,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
        以前这里会补一句「单位不同所以不合计」，用户明确说没用又占地方，已删除。 -->
   <div class="chips-row">
     <div class="chips" id="chips"></div>
+    <!-- 签到逻辑说明入口：就放在「N 个正常 / N 个已签」右边，用户一眼能找到 -->
+    <button class="viewbtn" id="btnHelp" aria-label="签到逻辑说明">{{ICON:info}}</button>
     <button class="viewbtn" id="btnView" aria-label="切换显示密度">{{ICON:list}}</button>
   </div>
 </div>
@@ -835,82 +854,49 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     });
   }
 
-  /* ---------- 主题：跟随系统 / 强制浅色 / 强制深色 ---------- */
-  // 三态循环：system → light → dark → system。
-  // 选择持久化到 localStorage；同时把颜色告诉壳层，让状态栏跟着变
-  // （Android 侧读 window.__pointsTheme，iOS 侧读 theme-color meta）。
+  /* ---------- 主题：只有浅色 / 深色两种 ---------- */
+  // 为什么删掉「跟随系统」：Android WebView 的 prefers-color-scheme 在相当一部分
+  // 机型上根本不准（恒 light / 恒 dark），我们绕过媒体查询、从壳层注入
+  // Configuration.uiMode、每秒轮询……折腾了三版仍然不可靠。
+  // 用户的原话是「你都实现不了，要它有什么用」。所以直接砍掉这个选项：
+  // 只有「浅色」「深色」两个确定值，点一下立刻变，没有任何"看系统脸色"的分支。
+  // 代价是首次安装不再自动匹配系统外观，换来的是 100% 可预期。
   var THEME_KEY = 'points_theme';
-  var THEMES = ['system', 'light', 'dark'];
-  var THEME_LABEL = { system: '跟随系统', light: '浅色', dark: '深色' };
+  var THEMES = ['light', 'dark'];
+  var THEME_LABEL = { light: '浅色', dark: '深色' };
+  var THEME_DEFAULT = 'dark';
 
+  // 读用户选择。历史值 'system' 一律落到默认深色——老用户升级后不会停在
+  // 一个已经不存在的模式上，也不会出现「localStorage 是 system 但界面是浅色」的矛盾。
+  // 顺手把非法值写回默认，存储里不再留 'system' 这种幽灵值。
   function readTheme(){
     var v = '';
     try { v = localStorage.getItem(THEME_KEY) || ''; } catch (e) {}
-    return THEMES.indexOf(v) >= 0 ? v : 'system';
+    if (THEMES.indexOf(v) >= 0) return v;
+    try { localStorage.setItem(THEME_KEY, THEME_DEFAULT); } catch (e) {}
+    return THEME_DEFAULT;
   }
-  // 系统当前是不是深色。
-  //
-  // 实测坑（0.5.3）：Android WebView 里 prefers-color-scheme 这个**媒体查询**
-  // 常常失灵（内核版本老/被 ROM 改过），但 matchMedia(...).matches 走的是同一个
-  // 查询对象，很多机器上同样是错的——于是「跟随系统」永远落在浅色。
-  // 所以三路依次尝试，谁先给出确定答案用谁：
-  //   1) 壳层注入的 window.__pointsSystemDark（Android 用 Configuration.uiMode 算的真值）
-  //   2) matchMedia
-  //   3) 兜底浅色
-  function systemDark(){
-    try {
-      if (window.__pointsSystemDark === 1) return true;
-      if (window.__pointsSystemDark === 0) return false;
-    } catch (e) {}
-    try {
-      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches);
-    } catch (e) { return false; }
-  }
-  // 当前实际生效的是浅还是深（system 时看系统偏好）
-  function effectiveDark(){
-    var t = readTheme();
-    if (t === 'dark') return true;
-    if (t === 'light') return false;
-    return systemDark();
+  function isDark(){
+    return readTheme() === 'dark';
   }
   // 把主题写进 DOM，并同步状态栏颜色给壳层
-  //
-  // 关键改动（0.5.2）：system 不再靠 CSS 的 @media (prefers-color-scheme) 判定，
-  // 而是在 JS 里算出明暗后显式写 data-theme="dark"/"light"。
-  // 原因：Android WebView 的 prefers-color-scheme 常年不可靠——
-  //   部分机型恒为 light、部分恒为 dark（系统明明切了也不跟），
-  //   表现就是用户说的「跟随系统默认是深色，并没有跟随」。
-  // JS 侧 matchMedia 是同一套数据源，但由我们主动读、主动监听、主动落属性，
-  // 不依赖 WebView 内部对媒体查询的实现，两端行为一致。
-  // applyTheme：t 是「用户选择」（system/light/dark）。
-  // 可选的 darkOverride：system 模式下已知系统明暗时直接用它，
-  // 避免刚被壳层推了真值又回头去问那个不可靠的 matchMedia。
-  function applyTheme(theme, darkOverride){
-    var t = theme || readTheme();
+  function applyTheme(theme){
+    var t = THEMES.indexOf(theme) >= 0 ? theme : readTheme();
     var root = document.documentElement;
-    var dark = (typeof darkOverride === 'boolean') ? darkOverride : effectiveDark();
-    if (t === 'system'){
-      root.removeAttribute('data-theme');
-      root.setAttribute('data-theme', dark ? 'dark' : 'light');
-    } else {
-      root.setAttribute('data-theme', t);
-    }
+    root.setAttribute('data-theme', t);
     // color-scheme 决定 WebView 里滚动条/表单控件的明暗
-    root.style.colorScheme = (t === 'system') ? 'light dark' : t;
-    syncStatusBar(dark);
+    root.style.colorScheme = t;
+    syncStatusBar(t === 'dark');
     var btn = $('btnTheme');
     if (btn){
-      btn.innerHTML = ICON(t === 'dark' ? 'moon' : (t === 'light' ? 'sun' : 'auto'));
+      btn.innerHTML = ICON(t === 'dark' ? 'moon' : 'sun');
       btn.setAttribute('aria-label', '主题：' + THEME_LABEL[t]);
       btn.title = '主题：' + THEME_LABEL[t];
     }
   }
-  // 兼容别名：外部调用点只关心「按某个主题重绘一次」
-  function applyThemeFor(t, dark){ applyTheme(t, dark); }
   // syncStatusBar：状态栏/导航栏要跟页面背景同色，才不像「贴了一条固定色带」。
   // 我们自己画背景（edge-to-edge），原生侧只需要把图标明暗调对。
-  function syncStatusBar(darkOverride){
-    var dark = (typeof darkOverride === 'boolean') ? darkOverride : effectiveDark();
+  function syncStatusBar(dark){
     var bg = dark ? '#141218' : '#FBF8FF';
     var metas = document.querySelectorAll('meta[name="theme-color"]');
     for (var i = 0; i < metas.length; i++){
@@ -929,26 +915,19 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       }
     } catch (e) {}
   }
+  // 两态循环：light ⇄ dark
   function cycleTheme(){
-    var cur = readTheme();
-    var next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
-    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
-    applyTheme(next);
+    var next = readTheme() === 'dark' ? 'light' : 'dark';
+    setTheme(next);
     toast('主题：' + THEME_LABEL[next]);
     return next;
   }
   function setTheme(t){
-    if (THEMES.indexOf(t) < 0) t = 'system';
+    if (THEMES.indexOf(t) < 0) t = THEME_DEFAULT;
     try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
     applyTheme(t);
     return t;
   }
-  // 存储被外部改写（壳层注入、多窗口、开发者工具）时，也要立刻按新选择重绘。
-  // 否则 localStorage 已经是 'dark'，页面却还停在旧配色，要等下次系统事件才刷——
-  // 而系统事件又因为「用户已手动选择」被跳过，看起来就是「切了没反应」。
-  window.addEventListener('storage', function(e){
-    if (!e || e.key === THEME_KEY) applyTheme(readTheme());
-  });
 
   /* ---------- 备份文件读写 ----------
      手机上复制一长串 JSON 再粘贴是最难受的一步：选中容易错、键盘一挡就看不见。
@@ -1320,15 +1299,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     });
   }
 
-  // 状态行的统一文案：已签时必须带「+N 单位」。
+  // 状态行的统一文案：能拿到数值才写「+N 单位」，拿不到就只写状态。
   //
-  // 用户已经因为这句反馈过三次，最后一次的原话是「aipy 今日已签后面都没有 +100 灵石」
-  // 「百度搭子也没有」。根子有两个：
-  //   1) provider 各自拼字符串（aipy 拼的是「今日已签 · +N 灵石」，但没填 today_gain）；
-  //   2) 这里以前写的是「today_gain > 0 才拼」，provider 没给数就直接只剩「今日已签」。
-  // 现在改成：已签就把「+N 单位」无条件拼上，N 从 today_gain 取；
-  // 平台确实拿不到数时给「+?」占位，绝不再静默吞掉整段——用户要的是「一眼看到有收益」，
-  // 而不是我们替他决定“没数就不显示”。
+  // 历史：先是不带数字（用户投诉「今日已签后面没有 +N」），后来为了显数字
+  // 又搞了个「+?」占位（用户说「很搞笑」）。教训是——宁可不显示，也不要显示
+  // 一个看起来像出错的东西。所以现在：
+  //   有 today_gain → 今日已签 +N 单位
+  //   没有          → 今日已签          （干净收尾，不留悬念）
   function gainNum(r){
     var v = Number(r && r.today_gain);
     return isFinite(v) && v > 0 ? fmt(v) : '';
@@ -1339,7 +1316,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     if (r.error) return r.error;
     if (r.checked_in){
       var g = gainNum(r);
-      return '今日已签 +' + (g || '?') + ' ' + unit;
+      return g ? ('今日已签 +' + g + ' ' + unit) : '今日已签';
     }
     // 未签到但平台给了今日可得积分时，也顺手告诉用户能拿多少
     var g2 = gainNum(r);
@@ -1361,42 +1338,147 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     return (r && r.provider === 'dumate') ? '（搭子当天打开网页即自动发放）' : '';
   }
 
+  /* ---------- 活动条：把后台动作暴露给用户 ---------- */
+  // 为什么要它：用户完全看不出「自动签到」到底有没有在跑——打开 App 看到
+  // 未签，就以为要自己点；点了又不知道是不是重复。把每一步写出来，
+  // 「谁在签、签到第几个、签完没、刷新没」一目了然。
+  var actTimer = null;
+  function actShow(text){
+    var a = $('act'), t = $('actTxt');
+    if (!a || !t) return;
+    clearTimeout(actTimer);
+    a.className = 'act on';
+    t.textContent = text;
+  }
+  function actDone(text, holdMs){
+    var a = $('act'), t = $('actTxt');
+    if (!a || !t) return;
+    clearTimeout(actTimer);
+    a.className = 'act on done';
+    t.textContent = text;
+    actTimer = setTimeout(function(){ a.className = 'act'; }, holdMs || 3000);
+  }
+  function actErr(text, holdMs){
+    var a = $('act'), t = $('actTxt');
+    if (!a || !t) return;
+    clearTimeout(actTimer);
+    a.className = 'act on err';
+    t.textContent = text;
+    actTimer = setTimeout(function(){ a.className = 'act'; }, holdMs || 5000);
+  }
+  function actHide(){ var a = $('act'); clearTimeout(actTimer); if (a) a.className = 'act'; }
+  function pname(r){
+    return (r && (r.provider_name || r.provider)) || '账号';
+  }
+  function pshort(r){
+    return (r && (r.label || r.account_id)) ? (' · ' + (r.label || r.account_id)) : '';
+  }
+
   function doCheckin(id, btn){
+    // 手动点单个账号的「签到」也要有过程反馈：按钮变「…」只是局部变化，
+    // 顶部活动条才是用户真正在看的地方。
+    var row = null;
+    for (var k = 0; k < state.rows.length; k++){
+      if (state.rows[k].account_id === id){ row = state.rows[k]; break; }
+    }
     if (btn){ btn.disabled = true; btn.textContent = '…'; }
+    actShow((row ? pname(row) + pshort(row) : '账号') + ' 正在签到…');
     return j('/api/checkin?account=' + encodeURIComponent(id), { method: 'POST' })
       .then(function(res){
         var r = Array.isArray(res) ? res[0] : res;
-        if (r && r.error){ toast(r.error); }
-        else if (r && r.already){ toast('今日已签' + gainTxt(r) + (r.gain ? '' : alreadyWhy(r))); }
-        else if (r && r.ok){ toast('签到成功' + gainTxt(r)); }
-        else { toast('签到未成功'); }
+        if (r && r.error){
+          actErr('签到失败：' + r.error, 5000);
+          toast(r.error);
+        }
+        else if (r && r.already){
+          actDone(pname(row) + ' 今日已签' + gainTxt(r), 2500);
+          toast('今日已签' + gainTxt(r) + (r.gain ? '' : alreadyWhy(r)));
+        }
+        else if (r && r.ok){
+          actDone(pname(row) + ' 签到成功' + gainTxt(r), 2500);
+          toast('签到成功' + gainTxt(r));
+        }
+        else {
+          actErr('签到未成功，可下拉刷新重试', 5000);
+          toast('签到未成功');
+        }
+        actShow('正在刷新列表…');
         return load(true);
       })
-      .catch(function(e){ toast('签到失败：' + e.message); if (btn) btn.disabled = false; });
+      .catch(function(e){
+        actErr('签到失败：' + e.message, 5000);
+        toast('签到失败：' + e.message);
+        if (btn) btn.disabled = false;
+      });
   }
 
-  // 一键做完所有事：签到 → 领 AiPy 任务奖励 → 百度搭子抽奖。
-  // 用户的原话是「点一下全部签完并领掉，省一个按钮」——所以这三步串成一个动作，
-  // 只给用户看一条合并后的结果。
-  function checkinAll(){
-    if (state.busy) return;
+  // 一键做完所有事：逐个账号签到 → 领 AiPy 任务奖励 → 百度搭子抽奖。
+  //
+  // 关键改动（0.5.4）：签到从「一次 POST 让后端批量串行」改成「前端逐个 POST」。
+  // 原因：批量接口只有一个最终响应，中途什么都不知道——用户打开 App 看到
+  // 「今日未签」，几秒后又变「今日已签」，中间发生了什么完全空白，于是怀疑
+  // 「是不是要我自己点」「是不是后台签了前台没刷新」。改成逐个请求后，
+  // 每签一个就更新顶部活动条：百度搭子 正在签到…（2/3）→ 已签 +500 积分。
+  //
+  // 并发策略仍是串行（一个签完再发下一个），保留原来的防风控意图；
+  // 账号之间留 250ms 间隔，不制造瞬时并发。
+  function checkinAll(opts){
+    if (state.busy) return Promise.resolve(null);
+    var quiet = !!(opts && opts.quiet);   // 自动签到：完成后不弹 toast，只更新活动条
     state.busy = true;
-    var b = $('btnAll'); b.disabled = true;
-    var origHTML = b.innerHTML;
-    b.textContent = '签到中…';
+    var b = $('btnAll');
+    var origHTML = b ? b.innerHTML : '';
+    if (b){ b.disabled = true; b.textContent = '签到中…'; }
     var stat = { ok: 0, skip: 0, bad: 0, taskClaimed: 0, taskGain: 0, taskUnit: '',
                  drawn: 0, drawGain: 0, drawPrizes: [], drawUnit: '' };
 
-    j('/api/checkin', { method: 'POST' })
-      .then(function(res){
-        var arr = Array.isArray(res) ? res : [res];
-        for (var i = 0; i < arr.length; i++){
-          if (arr[i].error) stat.bad++;
-          else if (arr[i].already) stat.skip++;
-          else stat.ok++;
-        }
+    // 待签队列：出错的账号跳过（它连状态都读不到，签也白签）
+    var todo = [];
+    for (var i = 0; i < state.rows.length; i++){
+      var r = state.rows[i];
+      if (!r.error && !r.checked_in) todo.push(r);
+    }
+    var total = todo.length;
+    var idx = 0;
+
+    function step(){
+      if (idx >= total) return Promise.resolve();
+      var row = todo[idx];
+      var n = idx + 1;
+      actShow(pname(row) + pshort(row) + ' 正在签到…（' + n + '/' + total + '）');
+      return j('/api/checkin?account=' + encodeURIComponent(row.account_id), { method: 'POST' })
+        .then(function(res){
+          var x = Array.isArray(res) ? res[0] : res;
+          if (x && x.error){
+            stat.bad++;
+            actErr(pname(row) + ' 签到失败：' + x.error, 4000);
+          } else if (x && x.already){
+            stat.skip++;
+            actDone(pname(row) + ' 今日已签' + gainTxt(x), 1600);
+          } else if (x && x.ok){
+            stat.ok++;
+            actDone(pname(row) + ' 签到成功' + gainTxt(x), 1600);
+          } else {
+            stat.bad++;
+            actErr(pname(row) + ' 签到未成功', 4000);
+          }
+        }, function(e){
+          stat.bad++;
+          actErr(pname(row) + ' 签到失败：' + (e && e.message ? e.message : '网络错误'), 4000);
+        })
+        .then(function(){
+          idx++;
+          // 账号之间留一点间隔：上一家的风控是按「同设备短时间连续写」判的
+          return new Promise(function(res){ setTimeout(res, 250); }).then(step);
+        });
+    }
+
+    actShow(total ? ('准备签到，共 ' + total + ' 个待签账号…') : '账号都已是已签状态，检查奖励中…');
+    return step()
+      .then(function(){
         // 签完立刻领 AiPy 任务奖励（签到会解锁部分任务）
-        b.textContent = '领奖励…';
+        if (b) b.textContent = '领奖励…';
+        actShow('正在领取任务奖励…');
         return post('/api/tasks/claim_all', {});
       })
       .then(function(res){
@@ -1407,7 +1489,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           if (rows[i].unit) stat.taskUnit = rows[i].unit;
         }
         // 再抽百度搭子的奖（每次签到送一次机会）
-        b.textContent = '抽奖中…';
+        if (b) b.textContent = '抽奖中…';
+        actShow('正在抽奖…');
         return post('/api/lottery/draw_all', {});
       })
       .then(function(res){
@@ -1419,13 +1502,30 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           var pz = rows[i].prizes || [];
           for (var k = 0; k < pz.length; k++){ if (pz[k]) stat.drawPrizes.push(pz[k]); }
         }
-        toast(summaryOf(stat));
-        return load(true);
+        actShow('正在刷新列表…');
+        return load(true).then(function(){
+          // 本地回环刷新通常 <100ms，这一步一闪而过，用户会以为「跳过了」。
+          // 留 400ms 让它确实可见——「签完还要刷新」本身就是需要被看见的信息。
+          return new Promise(function(res){ setTimeout(res, 400); });
+        });
       })
-      .catch(function(e){ toast('签到失败：' + e.message); })
+      .then(function(){
+        var sum = summaryOf(stat);
+        if (!quiet) toast(sum);
+        // 收尾文案：让用户明确知道「这轮结束了，页面已是最新」
+        if (stat.bad){
+          actErr('完成 · ' + sum + '（有失败，可下拉刷新重试）', 6000);
+        } else {
+          actDone('完成 · ' + sum, 4000);
+        }
+      }, function(e){
+        actErr('签到失败：' + (e && e.message ? e.message : '网络错误'), 6000);
+        if (!quiet) toast('签到失败：' + e.message);
+      })
       .then(function(){
         state.busy = false;
-        b.disabled = false; b.innerHTML = origHTML;
+        if (b){ b.disabled = false; b.innerHTML = origHTML; }
+        return stat;
       });
   }
 
@@ -1502,6 +1602,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   $('btnTheme').addEventListener('click', cycleTheme);
   var vb = $('btnView');
   if (vb) vb.addEventListener('click', cycleView);
+  var hb = $('btnHelp');
+  if (hb) hb.addEventListener('click', openHelp);
   $('btnAdd').addEventListener('click', openAddSheet);
   $('btnSettings').addEventListener('click', openSettings);
 
@@ -1661,12 +1763,52 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     });
   }
 
+  /* ---------- 签到逻辑说明 ---------- */
+  // 用户的原话：「我到现在都没搞清楚你到底是怎么设计的」「谁前签谁后签、
+  // 还是没签、还是后台在签前台没刷新」。所以把这套机制原原本本写出来，
+  // 包括「为什么百度搭子天然就是已签」这种反直觉的点。
+  function openHelp(){
+    openSheet('签到是怎么跑的', '看一遍就明白，不用记。', function(body, close){
+      function para(title, text){
+        if (title) body.appendChild(el('div', 'sect-h', title));
+        var p = el('div', 'sheet-sub');
+        p.style.margin = '0 0 14px';
+        p.innerHTML = text;
+        body.appendChild(p);
+      }
+      para('① 打开 App 就自动签，不用你点',
+        '每次进入前台（冷启动、从后台切回来）都会跑一轮：' +
+        '<b>先查状态 → 再签未签的账号 → 最后刷新列表</b>。' +
+        '整个过程会显示在最上面那条提示里，比如「百度搭子 正在签到…（2/3）」，' +
+        '签完变绿写「完成 · 新签 2，已签 1」，几秒后自动收起。');
+      para('② 底部「签到」按钮是用来兜底的',
+        '自动签到如果因为网络抖动、cookie 快过期、平台风控失败了，' +
+        '那一个账号会停在「今日未签」，这时点它的「签到」按钮（或底部「一键签到」）重试。' +
+        '已经签过的账号不会再重复请求，点也不会多扣次数。');
+      para('③ 为什么百度搭子经常一打开就是「已签」',
+        '这家的每日积分是<b>你当天第一次打开百度搭子网页时就由平台自动发了</b>，' +
+        '服务器上早就记成「已发放」。我们看到的状态是真实的——不是我们替你签的，' +
+        '也不是判断错了。所以它有没有「+N 积分」取决于平台接口给不给具体数值，' +
+        '给就显示「今日已签 +500 积分」，不给就只写「今日已签」。');
+      para('④ 为什么其他平台要等几秒才变「已签」',
+        'aipy、WorkBuddy 这些必须由我们主动发签到请求才算，' +
+        '平台不会自动发。所以打开 App 的那一两秒它们显示「今日未签」，' +
+        '等自动签到跑完才变「今日已签 +N 灵石 / +N 积分」。' +
+        '这中间的等待就是顶部提示条在跑。');
+      para('⑤ 后台会偷偷签吗',
+        '不会。App 在后台被系统挂起后不做任何事（iOS 也不允许）。' +
+        '所以只有你打开 App 的那一刻才会签。App 回到前台时，' +
+        '如果离开超过 45 秒，会整页重建一次再自动签到——' +
+        '这一步是为了修掉「后台久了切回来显示读取失败」的问题。');
+    });
+  }
+
   /* ---------- 设置：账号管理 / 备份 / 版本 ---------- */
-  function openSettings(){
-    openSheet('设置', '外观、账号、备份与运行日志。', function(body, close){
+  function openSettings(){    openSheet('设置', '外观、账号、备份与运行日志。', function(body, close){
       body.appendChild(el('div', 'sect-h', '外观'));
       var themeRow = el('div', 'seg');
-      ['system', 'light', 'dark'].forEach(function(t){
+      // 只有浅色 / 深色两个选项。「跟随系统」已移除——理由见 applyTheme 上方注释。
+      THEMES.forEach(function(t){
         var seg = el('button', 'seg-item' + (readTheme() === t ? ' on' : ''), THEME_LABEL[t]);
         seg.addEventListener('click', function(){
           setTheme(t);
@@ -2227,16 +2369,37 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     loginPendingAt = 0;
     load(true).then(function(){ toast('已同步账号'); });
   }
+  // 整页 reload 的限流版：60 秒内最多一次。
+  // 没有它的话，「失败 → reload → 又失败 → 又 reload」会变成死循环，
+  // 用户看到的是页面一直白屏闪。有了它，最坏情况是「一分钟重试一次」，
+  // 期间界面还能正常显示错误和手动重试按钮。
+  var RELOAD_KEY = 'last_reload_at';
+  function notifyReloadThrottled(){
+    var now = Date.now(), last = 0;
+    try { last = Number(localStorage.getItem(RELOAD_KEY) || 0) || 0; } catch (e) {}
+    if (now - last < 60000) return false;
+    try { localStorage.setItem(RELOAD_KEY, String(now)); } catch (e) {}
+    notifyReload();
+    return true;
+  }
+
   function autoCheckin(allowReload){
     if (autoTask) return autoTask;
+    actShow('正在获取账号状态…');
     autoTask = load(true).then(function(ok){
       if (!ok){
         // iOS 后台回前台：WKWebView 的网络进程可能被系统回收，之后所有 fetch
         // 都会持续失败，重试也救不回来。此时唯一出路是整页 reload，让 WebKit
         // 重建网络栈。先写恢复标志，新页面加载后据此把自动签到续上。
         if (allowReload){
-          try { localStorage.setItem('resume_checkin', '1'); } catch (err) {}
-          notifyReload();
+          if (notifyReloadThrottled()){
+            actShow('连接已断开，正在重建页面…');
+            try { localStorage.setItem('resume_checkin', '1'); } catch (err) {}
+          } else {
+            actErr('读取失败，请下拉刷新重试', 8000);
+          }
+        } else {
+          actErr('读取失败，请下拉刷新重试', 8000);
         }
         return false;
       }
@@ -2246,9 +2409,12 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         if (!r.error && !r.checked_in){ need = true; break; }
       }
       if (need && !state.busy){
-        checkinAll();
-        return true;
+        // quiet：自动签到不弹 toast（用户没点按钮，弹窗很突兀），
+        // 进度全部走顶部活动条——这样「正在签 / 签完了」始终有反馈。
+        return checkinAll({ quiet: true }).then(function(){ return true; });
       }
+      // 全部已签：明确告诉用户「这轮不用签」，而不是静悄悄什么都不显示
+      actDone('全部账号今日已签，无需操作', 2600);
       return need;
     }).then(function(v){
       // 留一点冷却，避免刚结束又被下一次唤醒立刻触发
@@ -2276,46 +2442,17 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   /* ---------- 启动 ---------- */
-  // 主题要在首屏渲染前就定好，否则暗色用户会先看到一帧白底再翻黑。
+  // 主题要在首屏渲染前就定好，否则深色用户会先看到一帧白底再翻黑。
+  // 这里不再有任何系统偏好分支：localStorage 里是什么就用什么，没有就默认深色。
   applyTheme(readTheme());
-  // 系统主题变了要立刻跟上（用户在「跟随系统」下切了深色/浅色开关）。
-  // 只监听不写 localStorage：这是系统事件，不该覆盖用户的选择。
-  try {
-    var mqDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-    if (mqDark){
-      var onSchemeChange = function(){
-        if (readTheme() !== 'system') return;   // 用户手动选了浅/深，不打扰
-        applyTheme('system');
-      };
-      if (mqDark.addEventListener) mqDark.addEventListener('change', onSchemeChange);
-      else if (mqDark.addListener) mqDark.addListener(onSchemeChange);  // 老 WebView
-    }
-  } catch (e) {}
-  // 壳层（Android）在系统深/浅色变化时会调这个函数把真值推进来。
-  // 上面那条 matchMedia 在部分 WebView 上压根不触发 change，靠它不可靠。
-  window.__pointsOnSystemTheme = function(dark){
-    try { window.__pointsSystemDark = dark ? 1 : 0; } catch (e) {}
-    // 注意：这里必须用 readTheme() 现读，而且判定的是【用户选择】是否为 system。
-    // 早先的写法有 bug——系统推浅色时 t 已经是 'light'，会被误判成「用户选了浅色」
-    // 而跳过重绘，甚至把手动选的深色覆盖掉。
-    if (readTheme() !== 'system') return;
-    applyThemeFor('system', !!dark);
-  };
-  // 兜底轮询：系统主题切换没有可靠事件（尤其 Android WebView）时，
-  // 每秒读一次真值，变了才重绘。代价极低（一次属性比较），换来「跟随系统真的跟得上」。
-  (function(){
-    var last = null;
-    setInterval(function(){
-      if (readTheme() !== 'system') return;
-      var d = systemDark();
-      if (last === null) { last = d; return; }
-      if (d !== last){ last = d; applyTheme('system'); }
-    }, 1000);
-  })();
   // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
   applyView(readView());
   showSkeleton();
-  load(true);
+  // 页面自己就发起「查询 → 自动签到」，不再等壳层来调。
+  // 之前只有壳层主动 evaluateJavascript 才签，万一那次注入被吞（页面还在加载、
+  // WebView 刚重建），就整轮都不签了，表现是「打开了但没签」。
+  // 现在两条路都留着，autoTask 会去重，不会重复签。
+  autoCheckin(true);
   // reload 续跑：iOS 后台回前台时网络进程被回收，fetch 持续失败 → autoCheckin
   // 写下 resume_checkin 标志后整页 reload。这里把上次没做完的自动签到续上。
   // 传 false：这次如果再失败就只显示错误，绝不再 reload（防死循环）。
@@ -2364,10 +2501,11 @@ function ICON(name){
     // 齿轮：外圈八齿 + 中心圆孔（与 icons.go 保持一致）。
     // 不要用「小圆 + 放射短线」——那是太阳的画法，40px 下根本分不出来。
     gear:'<path d="M12 2.6l1.9 1.1 2.2-.3 1.2 1.9 2 1 .2 2.2 1.5 1.6-1.5 1.6-.2 2.2-2 1-1.2 1.9-2.2-.3L12 21.4l-1.9-1.1-2.2.3-1.2-1.9-2-1-.2-2.2L3 12l1.5-1.6.2-2.2 2-1 1.2-1.9 2.2.3z"/><circle cx="12" cy="12" r="3.1"/>',
-    // 主题三态：太阳 = 浅色 / 月亮 = 深色 / 半圆 = 跟随系统
+    // 主题两态：太阳 = 浅色 / 月亮 = 深色（跟随系统已移除）
     sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M21.4 12h-2.2M4.8 12H2.6M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5M18.6 18.6l-1.5-1.5M6.9 6.9L5.4 5.4"/>',
     moon:'<path d="M20.5 14.3A8.6 8.6 0 0 1 9.7 3.5a8.6 8.6 0 1 0 10.8 10.8z"/>',
-    auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17" fill="currentColor" stroke="none"/>',
+    // 说明：圆圈里一个小写 i，和「更多」的三点区分明显
+    info:'<circle cx="12" cy="12" r="8.6"/><path d="M12 10.6v6"/><circle cx="12" cy="7.6" r="1" fill="currentColor" stroke="none"/>',
     // 视图密度：list = 三行横线（紧凑列表）/ grid = 四格（卡片平铺）
     list:'<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4" cy="6.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="17.5" r="1.1" fill="currentColor" stroke="none"/>',
     grid:'<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
@@ -2388,7 +2526,7 @@ var indexHTML = buildIndex()
 
 func buildIndex() string {
 	out := indexTmpl
-	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task", "sun", "moon", "auto", "list", "grid", "ticket", "trophy"} {
+	for _, name := range []string{"spark", "refresh", "checkAll", "plus", "warn", "gear", "close", "link", "clock", "coin", "check", "arrow", "task", "sun", "moon", "info", "list", "grid", "ticket", "trophy"} {
 		out = strings.ReplaceAll(out, "{{ICON:"+name+"}}", iconSVG(name))
 	}
 	return out
