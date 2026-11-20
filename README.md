@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.5.5-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.6.0-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -51,6 +51,8 @@
 | 🌗 **双态主题** | 浅色 / 深色，状态栏图标明暗同步（「跟随系统」在 WebView 里不可靠，已移除） |
 | 💾 **免登录迁移** | 备份导出为真实文件（系统文件面板选位置），换机导入即恢复全部账号与登录态 |
 | 🧭 **内置运行日志** | 设置页可直接看每条失败请求的时间、路径、状态码与业务码，一键复制反馈；凭据自动脱敏 |
+| 🔑 **API 令牌管理** | AiPy 的调用密钥（`sk-` 开头）可在 App 内新建 / 启停 / 删除，额度、模型限制、IP 白名单都能改；误删正在用的那条会被拦下 |
+| 🔔 **签到通知** | 企业微信 / 钉钉 / 飞书 / Bark / 自定义 Webhook 五渠道，一次一键签到只推一条汇总，失败项置顶 |
 | 🪶 **零框架** | 前端不用框架、不用打包器，包体为零，首屏无白屏等待 |
 
 ## 截图
@@ -61,16 +63,19 @@
 
 ## 支持平台
 
-| 平台 | 认证方式 | 签到 | 任务 | 抽奖 |
-|---|---|:---:|:---:|:---:|
-| WorkBuddy | OAuth token | ✅ | — | — |
-| 灵犀（kdocs） | cookie | ✅ | — | — |
-| 百度搭子 | cookie | ✅ | — | ✅ |
-| AiPy | cookie | ✅ | ✅ | — |
-| Trae | JWT | ✅ | — | — |
-| MiniMax | cookie（盐值待确认） | 🚧 | — | — |
-| 豆包 | 页面自动化 | 🚧 | — | — |
-| Qoder | 桌面端指纹 | ❌ 仅展示 | — | — |
+| 平台 | 认证方式 | 签到 | 任务 | 抽奖 | API 令牌 |
+|---|---|:---:|:---:|:---:|:---:|
+| WorkBuddy | OAuth token | ✅ | — | — | — |
+| 灵犀（kdocs） | cookie | ✅ | — | — | — |
+| 百度搭子 | cookie | ✅ | — | ✅ | — |
+| AiPy | cookie | ✅ | ✅ | — | ✅ |
+| Trae | JWT | ✅ | — | — | — |
+| MiniMax | cookie（盐值待确认） | 🚧 | — | — | — |
+| 豆包 | 页面自动化 | 🚧 | — | — | — |
+| Qoder | 桌面端指纹 | ❌ 仅展示 | — | — | — |
+
+> 「API 令牌」指平台对外发放的调用密钥（`sk-` 开头），与登录凭据是两回事。
+> 目前只有 AiPy 控制台提供这套接口，其余平台没有对应能力，因此菜单里不会出现该项。
 
 ## 安装
 
@@ -122,7 +127,9 @@ go run ./cmd/pointsctl -action serve -dir /tmp/pts
 ```
 core/                 Go 引擎
   provider/           平台适配器：workbuddy / aipy / dumate / lingxi / trae
+                      + 能力扩展：task.go / lottery.go / token.go / errkind.go
   panel/              面板 HTTP 服务 + 内嵌前端（index.go / icons.go）
+                      + 规则加固：task_memo.go（任务去重）/ notify.go（Webhook）
   httpx/              零依赖 HTTP 层
   scheduler/          当日随机错峰排期
   store/              账号存储（含拖拽排序的 Order 字段）
@@ -149,9 +156,22 @@ type LotteryProvider interface {      // 签到后抽奖
     DrawStatus(ctx, cred) (DrawStatus, error)
     Draw(ctx, cred) (DrawResult, error)
 }
+
+type TokenManager interface {         // API 令牌（Key）管理
+    ListTokens(ctx, cred) ([]APIToken, error)
+    CreateToken(ctx, cred, in TokenInput) (APIToken, error)
+    UpdateToken(ctx, cred, in TokenInput) error
+    DeleteToken(ctx, cred, id int64) error
+    SetTokenStatus(ctx, cred, id int64, status int) error
+}
 ```
 
-`Registry.All()` 自动探测并写入 `Meta.Tasks` / `Meta.Lottery`，前端据此决定是否显示对应按钮。
+`Registry.All()` 自动探测并写入 `Meta.Tasks` / `Meta.Lottery` / `Meta.Tokens`，
+前端据此决定「···」菜单里出现哪几项。
+
+错误分类同样走统一枚举（`core/provider/errkind.go`）：`auth` / `already` / `captcha` /
+`rate_limit` / `blocked` / `network` / `server` / `unknown`。分类决定了该不该给「重试」：
+只有 `network`、`server`、`rate_limit` 是可重试的，凭证失效和风控冻结重试也没用。
 
 ## 开发
 
@@ -212,6 +232,10 @@ python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 - **百度搭子一打开就是「已签」**：它的每日积分在你当天第一次访问网页时就由平台自动发放了，我们看到的是真实状态，不是判断错误。
 - **切后台回来不签到**：这是刻意设计。只有打开 App 那一次会自动签，之后请手动点「一键签到」。
 - **后台久了回来读取失败**：系统回收了 WebView 的渲染进程，页面已经死了。App 会先探活，探不到就整页重建（先 `about:blank` 再回面板），不需要手动杀进程。
+- **提示「未能确认到账」**：签到请求发出去了，但紧接着的回查没看到 `今天已签`。这既可能是真没到账，也可能是上游有延迟——所以下拉刷新核对一下，不要立刻重复点签到。
+- **提示「该账号正在签到中，已跳过」**：同一个账号上一轮还没跑完就又被触发了一次。这是互斥锁在起作用，防止连点把同一份请求打两遍上游。
+- **通知没收到**：先在「设置 → 签到通知」点「发测试」。测试走的是和正式推送**完全相同**的代码路径，测试不通就是地址/渠道选错了。4xx（地址失效）会自动关闭通知并在设置页挂横幅，5xx 只累计失败次数。
+- **Webhook 为什么必须由 Go 发**：JS `fetch` 会带上 `Origin: http://127.0.0.1:...`，企业微信和钉钉的网关会直接拒收；而且 App 切后台时 JS 请求会被系统掐断。所以前端只负责把这一轮结果整理好交给 `/api/notify`。
 
 ## 设计约束
 
@@ -230,6 +254,10 @@ python3 tools/gh_sync.py --repo OWNER/NAME             # 真推
 | UI 走本地 HTML 而不是原生声明式 | 一套代码双端复用，不引入 SwiftUI/Compose 两套成本 |
 | 混合单位不显示总数 | 100 灵石 + 12.5 积分加起来没有任何含义 |
 | 签名密钥随仓库走 | 换密钥 = 用户必须卸载重装 = 账号全丢 |
+| 任务奖励按 `日期\|平台\|账号\|任务` 四维去重 | 只在单维度去重会让两个平台同名任务互相顶掉；只有真拿到奖励（`>0`）才记账 |
+| 签到成功后回查一次再报成功 | 上游 200 不等于到账；回查本身失败时不判失败，避免把成功误报成失败 |
+| 推送失败绝不影响签到结果 | 推送是附加价值；`/api/notify` 一律返回 `ok=true`，只带 `sent` 与 `error` |
+| 脱敏在发送前做，不在展示时做 | Webhook 是把内容推出设备，cookie/key 一旦进去等于发给第三方留档 |
 
 ## 致谢
 

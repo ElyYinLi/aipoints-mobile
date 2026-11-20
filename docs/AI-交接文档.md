@@ -14,12 +14,25 @@
 
 **为什么这么设计**：界面只写一份两端通用；业务逻辑只写一份 Go；凭据不出本机；平台接口改版时只需改一个 provider 文件。
 
-**当前行为（0.5.5 起，改动前务必确认没有破坏）**：
+**当前行为（0.6.0 起，改动前务必确认没有破坏）**：
 
 - **冷启动**跑一次完整一键签到：签到 → 领任务奖励 → 抽奖，与点底部按钮**同一条代码路径**（`checkinAll`）
 - **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）
 - 签到进度全程显示在顶部活动条（`#act`），逐账号 `正在签到…（2/3）`
 - 后台久了回来读不到数据时，壳层先探活再**整页重建**（`about:blank` → 面板），不是简单 `reload()`
+- 账号卡片的右上角「···」是**唯一**的次级功能入口：每日任务 / 抽奖 / API 令牌 / 启停 / 删除
+- 一次一键签到结束推**一条** Webhook 汇总（五渠道），失败项置顶
+
+**0.6.0 新增的规则（都在 `core/panel/` 里，改之前先读对应文件头注释）**：
+
+| 规则 | 文件 | 一句话说明 |
+|---|---|---|
+| 任务去重 | `task_memo.go` | 键为 `日期\|平台\|账号\|任务类型`，只有 `Gain>0` 才记账 |
+| busy 互斥 | `panel.go` | 键为 `平台\|账号`，防连点把同一份请求打两遍 |
+| 签到二次核对 | `panel.go` | 成功后再 `Query` 一次，未确认则报「未能确认到账」 |
+| 错误分类 | `provider/errkind.go` | 8 类枚举，只有 network/server/rate_limit 可重试 |
+| 通知 | `notify.go` | 五渠道报文 + 发送前脱敏 + 4xx 自动停用 |
+| 令牌 | `api_tokens.go` | 删除保护：key 正好是当前登录凭证时拒绝 |
 
 **仓库**：`github.com/ElyYinLi/aipoints-mobile`（**公开**）· 分支 `main` · MIT
 
@@ -103,7 +116,29 @@ type LotteryProvider interface {
 }
 ```
 
-启用方式：在 provider 文件末尾写 `var _ LotteryProvider = (*Xxx)(nil)`，`registry.All()` 会自动用类型断言推断 `Meta.Lottery = true`，UI 自动出现「抽奖」按钮。**不需要**在别处登记。
+启用方式：在 provider 文件末尾写 `var _ LotteryProvider = (*Xxx)(nil)`，`registry.All()` 会自动用类型断言推断 `Meta.Lottery = true`，UI 自动出现「抽奖」入口。**不需要**在别处登记。
+
+### 2.3b TokenManager（可选：有「API 令牌」管理的平台，0.6.0）
+
+```go
+type TokenManager interface {
+    Provider
+    ListTokens(ctx, Credential) ([]APIToken, error)
+    CreateToken(ctx, Credential, TokenInput) (APIToken, error)
+    UpdateToken(ctx, Credential, TokenInput) error
+    DeleteToken(ctx, Credential, id int64) error
+    SetTokenStatus(ctx, Credential, id int64, status int) error
+}
+```
+
+**不要把 `APIToken.Key` 和 `Credential.AccessToken` 搞混**：前者是平台对外发放的调用密钥（`sk-` 开头，用来调 API），后者是这个账号登录用的凭证。两者恰好可能是同一个字符串——这正是删除保护存在的理由（`api_tokens.go` 里比对 `in.Key == cred.AccessToken`）。
+
+AiPy 的接口形状有三处「不正常」，必须照抄，别「优化」：
+
+- 列表两条路径回退：`/api/token/page?p=1&size=100` 失败后改走 `/api/token/?p=0&size=100`
+- 删除路径**带尾斜杠**：`DELETE /api/token/{id}/`（少了就是 404）
+- 启停不是 PUT，是 `PUT /api/token/?status_only=true`，body 只传 `{id, status}`
+- `expired_time=0` 上游理解为「立刻过期」，新建时必须补成 `-1`（`tokenBody` 里做）
 
 ### 2.4 关键数据结构
 
@@ -468,6 +503,77 @@ fmtMoney(n)  // 余额：<1 时保留两位
 
 奖励文案（`gainTxt` / `gainPart`）和余额显示都改用它。
 
+### 3.28 任务去重键必须四维（0.6.0）
+
+一开始想去重键只用 `任务类型`，实际会出事：`aipy` 的 `daily_ai_1` 和别的平台
+同名任务会互相顶掉——用户签完一个平台，另一个平台的同名奖励就再也领不到了。
+
+正确键是 `日期|平台|账号|任务类型`（`task_memo.go` 的 `taskKey`）。
+`TestTaskKeyIsolatesProviderAndAccount` 断言四个维度任一不同即不同键，改实现前先看它。
+
+第二条更要紧：**只有 `Gain > 0` 才记账**。上游经常返回 `ok:true, gain:0`
+（任务没达标但也回了 200），这时如果记账，用户当天就再也领不到了 —— 等于假账。
+
+### 3.29 二次核对不能把成功报成失败（0.6.0）
+
+签到接口返回 200 不等于到账：有平台是先受理后排队的。所以 `checkinOne` 在
+`res.OK && !res.Already && res.Error==""` 时会再 `Query` 一次确认 `CheckedIn`。
+
+三种边界，写错任何一种都会被用户当成 bug：
+
+| 情况 | 正确做法 |
+|---|---|
+| 回查拿到 `CheckedIn=true` | 保持成功 |
+| 回查拿到 `CheckedIn=false` | 报「未能确认到账」，不写成功（`TestConfirmCheckinDetectsFakeSuccess`） |
+| 回查**本身失败**（断网/超时） | **保持成功**，不能判为没到账（`TestConfirmCheckinToleratesQueryError`） |
+| 上游说 `Already` | 不回查，省一次请求（`TestConfirmSkipsWhenAlready` 断言 `queryCall == 0`） |
+
+### 3.30 错误分类的顺序是有讲究的（0.6.0）
+
+`Classify()` 先匹配正文关键词、后退回状态码。**关键词表的顺序就是优先级**，不能按字母排：
+
+- `auth` 必须排在 `blocked` 之前：「无权进行此操作」里含「操作」，会被 blocked 的
+  「禁止/操作」类词抢走，结果把「登录失效」报成「被风控」，用户跑去重新登录才发现没用。
+- `already` 必须排在 `blocked` 之前：「今日已签到」含「签到」，可能被 blocked 的
+  「签到时间」子串抢走，把「已签」报成「不在签到时间」。
+
+`TestClassifyOrder` 有 15 个用例守着这张表，动顺序必挂。
+
+另外只有 `network` / `server` / `rate_limit` 三类 `IsRetryable() == true`。
+凭证失效（`auth`）和风控（`blocked`）重试多少次都没用，给了重试按钮只会让用户白等。
+
+### 3.31 Webhook 必须在 Go 侧发（0.6.0）
+
+最初想在 JS 里 fetch 过去，两个硬伤：
+
+1. 页面跑在 `127.0.0.1:7879`，`fetch` 会带 `Origin: http://127.0.0.1:7879`，
+   企业微信/钉钉网关对这个 Origin 直接拒收；
+2. App 切后台时 WebView 的 JS 请求会被系统掐断，签到后半段推送直接丢。
+
+所以前端只做「把本轮结果整理成 `accounts[]` + `summary`」，发送、脱敏、重试计数全在
+`notify.go`。脱敏必须在**发送前**做：Webhook 是把内容推出设备，cookie/key 一旦进去
+等于发给第三方服务器留档（`maskNotify` 覆盖 `sk-` / `cookie:` / `authorization:` /
+`bearer ` / 11 位手机号 / 邮箱 / `session=`）。
+
+### 3.32 删除令牌时的「在用」保护（0.6.0）
+
+用户可能把 `sk-xxx` 直接当账号登录凭证用。这时在令牌列表里删掉它，账号立刻 401，
+而用户完全不理解发生了什么（「我就删了个没用的 key」）。
+
+处理：`handleTokenDelete` 比对 `in.Key == cred.AccessToken`，命中就拒绝并返回
+`in_use:true`，前端弹一次明确说明后果的确认框，确认后才带 `force:true` 重发。
+用户原话是「无所谓，你看着定」——这个保护是必要的，因为它防的是不可逆的误操作。
+
+### 3.33 通知的三个开关别搞混（0.6.0）
+
+`on_success` / `on_failure` / `always` 是**结果类型**维度，
+`on_manual` / `on_start` 是**触发源**维度，两组正交。
+
+一开始只有前两个，结果「全部已签的一轮」在 `on_failure=true, on_success=true` 下
+因为 `hasFail=false` 走 `on_success` 分支而被推出去 —— 用户收到的是一条
+「新签 0，已签 4」的推送，觉得吵。`always` 就是给这种场景用的显式开关：
+不勾时按结果类型过滤，勾了才无条件推。
+
 ---
 
 ## 4. 各平台实现要点
@@ -478,7 +584,7 @@ fmtMoney(n)  // 余额：<1 时保留两位
 | 金山灵犀 | `lingxi` | cookie | ✅ | — | `lingxi.go` |
 | 百度搭子 | `dumate` | cookie | ✅ | **抽奖** | `dumate.go` |
 | Trae | `trae` | token | ✅ | — | `trae.go` |
-| AiPy | `aipy` | cookie | ✅ | **任务领取** | `aipy.go` |
+| AiPy | `aipy` | cookie | ✅ | **任务领取** + **API 令牌** | `aipy.go` |
 
 ### 4.1 百度搭子接口清单
 
@@ -565,8 +671,8 @@ GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
 
 | 文件 | 字段 |
 |---|---|
-| `core/mobile/mobile.go` | `var Version = "0.5.1"` |
-| `android/app/src/main/AndroidManifest.xml` | `versionCode` / `versionName`（0.5.5 → 14 / 0.5.5） |
+| `core/mobile/mobile.go` | `var Version = "0.6.0"` |
+| `android/app/src/main/AndroidManifest.xml` | `versionCode` / `versionName`（0.6.0 → 15 / 0.6.0，code 每次必须 +1，否则覆盖安装会被拒） |
 | `ios/App/Info.plist` | `CFBundleShortVersionString` / `CFBundleVersion` |
 
 外加 `README.md` 的 version badge。
@@ -575,7 +681,7 @@ GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
 
 ## 6. 界面代码导航（`core/panel/index.go`）
 
-这文件 2100 行，全部 UI 都在这。结构：
+这文件 3100 行，全部 UI 都在这。结构：
 
 ```
 <style> ...设计令牌 / 组件样式... </style>     ← 约 1-550 行
@@ -596,8 +702,14 @@ GITHUB_TOKEN=<PAT> bash tools/push-via-api.sh
    actShow/actDone/actErr  顶部活动条的三种状态
    fmtGain/fmtMoney    小额数值格式化（灵石 0.04 不能显示成 0）
    summaryOf()         一键签到结果压成一句话
+   pushSummary()       一键签到收尾把本轮结果交给 Go 侧推送（不 await）
    openSheet()         通用底部弹层
-   openSettings()      设置面板（外观 / 账号管理 / 备份 / ★ 运行日志）
+   openSettings()      设置面板（外观 / 通知 / 账号管理 / 备份 / ★ 运行日志）
+   openNotify()        签到通知配置（五渠道 + 四个触发开关 + 发测试）
+   openAccountMenu()   卡片「···」菜单：任务 / 抽奖 / 令牌 / 启停 / 删除
+   openTokens()        API 令牌列表（含「在用」标记与删除保护确认）
+   openTokenEdit()     新建 / 编辑令牌（额度、模型限制、IP 白名单）
+   showNewKey()        创建成功后单独弹一次完整 key（只此一次机会）
    openLottery()       抽奖面板
    openTasks()         任务面板
    beginTrack()        长按拖拽排序
@@ -622,6 +734,71 @@ cd core && go run ./cmd/pointsctl -action serve    # 起面板
 ```
 
 更严谨的做法（本项目一直在用）：Playwright 打桩 `fetch` 造数据 + 截图看渲染。
+
+### 6.4 内联 JS 的语法闸门（0.5.4 起，每次改 index.go 必跑）
+
+`index.go` 是一整个 Go 字符串，Go 编译器不会看里面的 JS。写错一个括号照样能编译，
+到手机上才白屏。所以有一道独立闸门：
+
+```bash
+# 先把渲染后的 HTML 导出来（panel_test.go 里有现成的 DUMP 写法，或临时加一个
+# 只写文件的测试），再交给 node --check
+python3 tools/check_panel_js.py /tmp/index_rendered.html
+# 输出：内联脚本 2523 行 / 96845 字节 → 内联 JS 语法检查通过
+```
+
+`TestIndexRendersSelfContained` 会额外拦三类问题，改 UI 时容易被它挡下：
+
+- 残留 `{{ICON:xxx}}` 占位符（`buildIndex` 的白名单漏了这个图标名）
+- 出现 `http://` / `https://` / `@import url(` —— 面板必须自包含，任何外部资源都不许引
+  （连 placeholder 里的 `https://qyapi...` 也会被判违规，只能写成不带协议头的域名）
+- 缺少 `__pointsAutoCheckin` / `PointsBridge` / `points://login` / `pullToRefresh` / `safe-area-inset`
+
+---
+
+## 6.5 令牌与通知（0.6.0，从 aipy-checkin 移植）
+
+### 接口一览
+
+```
+GET  /api/tokens?provider=aipy&account=<id>   → {ok, tokens[], in_use_key, usable}
+POST /api/tokens/save    {provider, account, token:{id?,name,remain_quota,expired_time,unlimited_quota,model_limits,allow_ips}}
+POST /api/tokens/delete  {provider, account, id, key, force}
+POST /api/tokens/status  {provider, account, id, status}       // 1 启用 / 2 禁用
+
+GET  /api/notify/config  → {ok, config, types, fail_streak, last_error, disabled}
+POST /api/notify/config  {enabled,type,url,on_success,on_failure,on_manual,on_start,always}
+POST /api/notify/test    {}                                    // 走与正式推送完全相同的路径
+POST /api/notify/reset   {}                                    // 清「已自动停用」标记
+POST /api/notify         {trigger, accounts[], summary}         // 前端上报本轮结果
+```
+
+### 为什么 `/api/notify` 永远返回 `ok:true`
+
+推送失败绝不该让前端以为签到失败了。所以它只回 `{ok:true, sent:bool, error?}`，
+前端拿到 `error` 只是 `console.warn`，不弹 toast。改这个行为前先想清楚：
+用户点「一键签到」看到「推送失败」会以为签到失败了。
+
+### 触发开关的语义（别把三个搞混）
+
+| 字段 | 含义 |
+|---|---|
+| `on_success` | 有账号签到**成功**时推 |
+| `on_failure` | 有账号签到**失败**时推（失败项在正文里置顶） |
+| `always` | 一轮跑完就推，**不看结果**（含「全部已签」「全部失败」） |
+
+`on_start` / `on_manual` 是**触发源**开关，和上面三个是正交的：先按触发源过滤，
+再按结果类型过滤，`always` 命中则跳过结果类型判断。
+
+### 落盘位置
+
+`DataDir` 下三个文件，全部 `0600` + 原子写（`.tmp` → `rename`）：
+
+| 文件 | 内容 |
+|---|---|
+| `task_memo.json` | 今日已领过的任务键（加载时自动丢弃非今日的） |
+| `notify_memo.json` | 通知配置（**含 Webhook URL**，URL 里有机器人 key，等同凭据） |
+| `gain_memo.json` | 签到奖励兜底（0.5.2 起，用于「今日已签 +N」） |
 
 ---
 
@@ -711,6 +888,12 @@ python3 tools/check_secrets.py
 - **AES/加解密**：移动端凭据靠系统 Keychain/Keystore，Go 侧不做加解密
 - **抽奖历史只在内存**，App 重启即清空（用户没提需求，先这样）
 - **沙箱里 GitHub 只能走 REST API**，见 5.1
+- **令牌列表的 key 只有首尾几位**：上游列表接口做脱敏，完整 key 仅在创建响应里出现一次。
+  这不是我们的取舍，是平台就这样，所以「新建后立刻复制」那一步不能省
+- **通知只有一个 Webhook**：多个渠道要分别配置时只能来回改地址。用户明确说「全部 5 个」
+  指的是渠道种类，不是同时推 5 个地方
+- **令牌管理只有 AiPy**：`TokenManager` 接口是通用的，但其余平台控制台没有对应接口
+- **`always` 开关默认关闭**：打开后每次冷启动都会推一条，一天开 5 次 App 就 5 条
 
 ---
 
@@ -722,4 +905,8 @@ python3 tools/check_secrets.py
 | 0.4.2 | 一键签到合并领任务+抽奖、主题切换、状态栏沉浸、备份文件导入导出 |
 | 0.5.0 | 改名**积分矩阵**、抽奖可视化入口、账号拖拽排序、卡片/紧凑双视图、README 重写、加 `v0.5.0` tag |
 | 0.5.1 | 修 410110（UUID）、签到 +N 回执（差值反推）、提示统一带单位、设置页运行日志 |
-| **0.5.2** | **状态行统一「今日已签 +N 积分」（gain memo 兜底）、删掉合计区解释文案、system 主题改 JS 判定修 Android WebView 不跟随** |
+| 0.5.2 | 状态行统一「今日已签 +N 积分」（gain memo 兜底）、删掉合计区解释文案、system 主题改 JS 判定修 Android WebView 不跟随 |
+| 0.5.3 | 「今日已签」不再有数字时显示空、彻底删掉「跟随系统」主题 |
+| 0.5.4 | 签到进度条逐账号可见、iOS/Android 后台假死改整页重建、内联 JS 语法闸门 |
+| 0.5.5 | 冷启动走完整一键签到（修 todo 为空）、回前台只刷不签、说明弹层压到三条 |
+| **0.6.0** | **从 aipy-checkin 移植：API 令牌管理（AiPy）+ 五渠道 Webhook 通知；规则加固：任务去重键、busy 互斥、签到二次核对、ErrKind 错误分类；卡片次级功能收进「···」菜单** |

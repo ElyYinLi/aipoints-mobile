@@ -55,12 +55,16 @@ type Snapshot struct {
 	CheckedIn bool   `json:"checked_in"`
 	// TodayGain 是「今天签到能拿多少 / 拿了多少」，0 表示平台没给这个字段。
 	// 只用于签到结果回执（百度搭子签完要显示 +N 积分），不参与余额计算。
-	TodayGain float64         `json:"today_gain,omitempty"`
-	Streak    int             `json:"streak,omitempty"`
-	Detail    string          `json:"detail,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Raw       json.RawMessage `json:"-"`
-	At        time.Time       `json:"at"`
+	TodayGain float64 `json:"today_gain,omitempty"`
+	Streak    int     `json:"streak,omitempty"`
+	Detail    string  `json:"detail,omitempty"`
+	Error     string  `json:"error,omitempty"`
+	// Kind 是 Error 的分类（auth / captcha / blocked / network / server …）。
+	// 前端据此决定状态徽章的颜色与是否给「重试」按钮：断网可以重试，
+	// 凭证失效只能去重新登录，风控冻结点了也没用。空表示无错误。
+	Kind ErrKind         `json:"kind,omitempty"`
+	Raw  json.RawMessage `json:"-"`
+	At   time.Time       `json:"at"`
 }
 
 // Result 是一次签到归并结果。
@@ -74,6 +78,11 @@ type Result struct {
 	Unit    string `json:"unit,omitempty"`
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Kind 是 Error 的分类，语义同 Snapshot.Kind。
+	// 另有两个签到专用取值（用既有枚举表达，不新增常量）：
+	//   - ErrUnknown  + Message 含「未确认」= 请求已提交但二次核对没确认到账
+	//   - ErrBlocked  + OK=true          = 签到成功但奖励为 0（冻结）
+	Kind ErrKind `json:"kind,omitempty"`
 }
 
 // Meta 描述一个平台的元信息，供 UI 渲染与能力判断。
@@ -90,6 +99,10 @@ type Meta struct {
 	// 抽奖会随「一键签到」自动执行；同时账号卡片上会显示「抽奖」入口，
 	// 供用户查看剩余次数、抽到了什么、以及手动补抽。
 	Lottery bool `json:"lottery,omitempty"`
+	// Tokens 表示该平台支持「API 密钥（Key）管理」（实现了 TokenManager）。
+	// 目前只有 AiPy Pro 的控制台有这套东西，其余平台没有对应接口。
+	// 前端据此决定是否在账号卡片上显示「令牌」入口。
+	Tokens bool `json:"tokens,omitempty"`
 }
 
 // Provider 是所有平台适配器必须实现的接口。

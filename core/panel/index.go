@@ -495,6 +495,77 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .seg-item.on{background:var(--card);color:var(--on-surface);box-shadow:var(--shadow)}
 .seg-item:active{transform:scale(.97)}
 
+/* ---- 令牌列表（0.6.0） ----
+   一条令牌 = 名称 + key（脱敏） + 额度；操作收进右侧小按钮。
+   为什么不做表格：手机上一篇 12 列的表没人看得下去，竖排两行最省眼。 */
+.tok{
+  background:var(--surface-1);border-radius:var(--r-md);
+  padding:11px 13px;margin-bottom:9px;
+}
+.tok.off{opacity:.55}
+.tok-h{display:flex;align-items:baseline;gap:8px}
+.tok-h b{font-size:14px;font-weight:650;letter-spacing:-.01em;
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tok-h .st{font-size:11px;font-weight:640;padding:1px 7px;border-radius:var(--r-pill);
+  background:var(--ok-c);color:var(--ok);flex:0 0 auto}
+.tok.off .tok-h .st{background:var(--bad-c);color:var(--bad)}
+.tok-key{
+  font-family:var(--mono);font-size:11.5px;color:var(--on-surface-v);
+  margin-top:3px;word-break:break-all;line-height:1.45;
+}
+.tok-meta{font-size:11.5px;color:var(--on-surface-v);margin-top:3px}
+.tok-meta b{font-weight:620;color:var(--on-surface)}
+.tok-lim{font-size:11px;color:var(--on-surface-v);margin-top:2px;word-break:break-all}
+.tok-act{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.tok-btn{
+  border:0;border-radius:var(--r-pill);padding:6px 12px;font-size:12px;font-weight:620;
+  background:var(--surface-3);color:var(--on-surface);transition:transform .14s;
+}
+.tok-btn:active{transform:scale(.95)}
+.tok-btn.danger{color:var(--bad)}
+
+/* 通知表单里的复选框行 */
+.chk{
+  display:flex;align-items:center;gap:11px;padding:11px 2px;
+  border-bottom:1px solid var(--hair);
+}
+.chk:last-of-type{border-bottom:0}
+.chk-t{flex:1;min-width:0}
+.chk-t b{display:block;font-size:13.5px;font-weight:600}
+.chk-t i{display:block;font-style:normal;font-size:11.5px;color:var(--on-surface-v);
+  margin-top:1px;line-height:1.4}
+.sw{
+  width:44px;height:26px;border-radius:var(--r-pill);background:var(--surface-3);
+  border:0;position:relative;flex:0 0 auto;transition:background .18s;
+}
+.sw::after{
+  content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+  background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.28);
+  transition:transform .2s cubic-bezier(.2,.8,.2,1);
+}
+.sw.on{background:var(--primary)}
+.sw.on::after{transform:translateX(18px)}
+
+/* 设置页里的「跳转行」：右箭头 + 一行说明 */
+.nav-row{
+  display:flex;align-items:center;gap:12px;width:100%;border:0;
+  background:var(--surface-1);color:var(--on-surface);border-radius:var(--r-lg);
+  padding:12px 14px;margin-bottom:9px;text-align:left;
+}
+.nav-row:active{transform:scale(.98);background:var(--surface-3)}
+.nav-ic{width:32px;height:32px;border-radius:10px;flex:0 0 auto;
+  display:grid;place-items:center;background:var(--surface-3);color:var(--on-surface-v)}
+.nav-ic svg{width:17px;height:17px}
+.nav-t{flex:1;min-width:0}
+.nav-t b{display:block;font-size:14px;font-weight:640}
+.nav-t i{display:block;font-style:normal;font-size:11.5px;color:var(--on-surface-v);
+  margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-go{color:var(--on-surface-v);flex:0 0 auto}
+.nav-go svg{width:17px;height:17px}
+
+/* 概览触发行：点击查看本轮汇总 / 历史 */
+.hero-tap{cursor:pointer}
+
 /* Snackbar */
 .snack{
   position:fixed;left:50%;bottom:calc(88px + var(--sab));transform:translate(-50%,24px);
@@ -1113,23 +1184,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     stTxt.textContent = detailText(r);
     st.appendChild(stTxt);
 
-    // 右侧按钮组：任务 / 抽奖（仅支持平台）+ 签到
+    // 右侧按钮组：0.6.0 起只留「签到」。
+    // 任务 / 抽奖 / 令牌 全部收进右上角 ··· 菜单（用户：「收进菜单，因为不常用」）。
     var btns = document.createElement('div');
     btns.className = 'c-actions';
-
-    if (r.has_tasks && !r.error){
-      btns.appendChild(pillBtn('task', '任务', 'task',
-        '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务',
-        function(){ openTasks(r); }));
-    }
-    // 抽奖入口：百度搭子签到送抽奖机会，必须能点进去看剩余次数与奖品。
-    // 这里不判断 r.error：余额查询失败（比如刚过期）不代表抽奖也一定失败，
-    // 用户点进去看真实状态比事先替他判定更有用。
-    if (r.has_lottery){
-      btns.appendChild(pillBtn('ticket', '抽奖', 'lottery',
-        '查看 ' + (r.provider_name || r.provider || '') + ' 抽奖',
-        function(){ openLottery(r); }));
-    }
 
     var btn = document.createElement('button');
     btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
@@ -1174,13 +1232,19 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     row.appendChild(bal);
 
     var act = document.createElement('div'); act.className = 'row-act';
-    if (r.has_tasks || r.has_lottery){
-      // 紧凑视图只放一个入口，避免一行塞三个按钮；有抽奖优先展示抽奖
-      var moreEntry = pillBtn(r.has_lottery ? 'ticket' : 'task', '', 'mute',
-        r.has_lottery ? '抽奖' : '任务',
-        function(){ if (r.has_lottery) openLottery(r); else openTasks(r); });
-      moreEntry.innerHTML = ICON(r.has_lottery ? 'ticket' : 'task');
-      act.appendChild(moreEntry);
+    // 紧凑视图一行只放签到。额外功能（任务 / 抽奖 / 令牌）统一走 ··· 菜单，
+    // 否则一行挤三个按钮，点击区域会小于 32px，误触率明显上升。
+    if (r.has_tasks || r.has_lottery || r.has_tokens){
+      var rowMore = document.createElement('button');
+      rowMore.className = 'c-more';
+      rowMore.style.width = '28px'; rowMore.style.height = '28px';
+      rowMore.setAttribute('aria-label', '更多操作');
+      rowMore.innerHTML = ICON('more');
+      rowMore.addEventListener('click', function(e){
+        e.stopPropagation();
+        openAccountMenu(r);
+      });
+      act.appendChild(rowMore);
     }
     var btn = document.createElement('button');
     btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
@@ -1268,6 +1332,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         rows[j].provider_name = p.name;
         rows[j].has_tasks = !!p.tasks;
         rows[j].has_lottery = !!p.lottery;
+        rows[j].has_tokens = !!p.tokens;
       }
     }
     return rows;
@@ -1450,7 +1515,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     var origHTML = b ? b.innerHTML : '';
     if (b){ b.disabled = true; b.textContent = '签到中…'; }
     var stat = { ok: 0, skip: 0, bad: 0, taskClaimed: 0, taskGain: 0, taskUnit: '',
-                 drawn: 0, drawGain: 0, drawPrizes: [], drawUnit: '' };
+                 drawn: 0, drawGain: 0, drawPrizes: [], drawUnit: '',
+                 // lines 是逐账号的结果明细，只为「这一次推送」收集。
+                 // 不能回头从 state.rows 反推：那一轮成功几个、失败原因是什么，
+                 // 只有在请求返回的那一刻才知道。
+                 lines: [] };
 
     // 待签队列必须在「先读一遍状态」之后才组装。
     //
@@ -1485,19 +1554,31 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           var x = Array.isArray(res) ? res[0] : res;
           if (x && x.error){
             stat.bad++;
+            stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
+              status: 'fail', message: x.error });
             actErr(pname(row) + ' 签到失败：' + x.error, 4000);
           } else if (x && x.already){
             stat.skip++;
+            stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
+              status: 'already', message: '今日已签', gain: (x && x.gain) || 0,
+              unit: (x && x.unit) || '' });
             actDone(pname(row) + ' 今日已签' + gainTxt(x), 1600);
           } else if (x && x.ok){
             stat.ok++;
+            stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
+              status: 'ok', message: '签到成功', gain: (x && x.gain) || 0,
+              unit: (x && x.unit) || '' });
             actDone(pname(row) + ' 签到成功' + gainTxt(x), 1600);
           } else {
             stat.bad++;
+            stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
+              status: 'fail', message: (x && x.message) || '签到未成功' });
             actErr(pname(row) + ' 签到未成功', 4000);
           }
         }, function(e){
           stat.bad++;
+          stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
+            status: 'fail', message: (e && e.message) || '网络错误' });
           actErr(pname(row) + ' 签到失败：' + (e && e.message ? e.message : '网络错误'), 4000);
         })
         .then(function(){
@@ -1550,6 +1631,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       })
       .then(function(){
         var sum = summaryOf(stat);
+        // 一次一键签到只推一条汇总（用户明确要求，不逐账号刷屏）。
+        // 不 await：推送是附加价值，绝不该让「完成」提示等它。
+        pushSummary(quiet ? 'start' : 'manual', stat, sum);
         if (!quiet) toast(sum);
         // 收尾文案：让用户明确知道「这轮结束了，页面已是最新」
         if (stat.bad){
@@ -1566,6 +1650,28 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         if (b){ b.disabled = false; b.innerHTML = origHTML; }
         return stat;
       });
+  }
+
+  // pushSummary：把这一轮的结果交给 Go 侧推送。
+  //
+  // 三条规则，全部来自用户要求与实际踩坑：
+  //   1. 一次一键签到只推一条汇总，不逐账号发；
+  //   2. 触发时机由后端配置决定（手动 / 启动 / 是否连「无事发生」也推），
+  //      前端不判断，只如实上报——否则改配置还得改前端；
+  //   3. 推送本身失败绝不弹错、绝不影响签到结果，只在控制台留一行。
+  //   4. 有 on_failure 需求的人要的是「一条都不动也让我知道」，所以这里
+  //      只要这一轮确实扫过账号就上报（stat.lines 非空），空列表才跳过。
+  function pushSummary(trigger, stat, sum){
+    if (!stat || !stat.lines || !stat.lines.length) return;
+    post('/api/notify', {
+      trigger: trigger || 'manual',
+      accounts: stat.lines,
+      summary: sum
+    }).then(function(r){
+      if (r && r.error) console.warn('通知推送失败：' + r.error);
+    }).catch(function(e){
+      console.warn('通知推送失败：' + (e && e.message));
+    });
   }
 
   // 汇总里的「 +N 单位」片段。必须带单位，且数字和单位之间留空格——
@@ -1843,6 +1949,34 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         themeRow.appendChild(seg);
       });
       body.appendChild(themeRow);
+
+      // 通知入口放在「外观」之后、「账号管理」之前：它是全局配置，
+      // 和具体账号无关，放在账号列表里会被当成账号级设置。
+      function navRow(icon, title, sub, fn){
+        var b = el('button', 'nav-row');
+        var ic = el('span', 'nav-ic'); ic.innerHTML = ICON(icon);
+        b.appendChild(ic);
+        var t = el('span', 'nav-t');
+        t.appendChild(el('b', '', title));
+        t.appendChild(el('i', '', sub));
+        b.appendChild(t);
+        var go = el('span', 'nav-go'); go.innerHTML = ICON('arrow');
+        b.appendChild(go);
+        b.addEventListener('click', function(){ close(); setTimeout(fn, 240); });
+        body.appendChild(b);
+        return b;
+      }
+      body.appendChild(el('div', 'sect-h', '通知'));
+      var notifyRow = navRow('bell', '签到通知', '未配置', openNotify);
+      // 顺手把状态写进副标题：不用点进去就知道开没开
+      j('/api/notify/config').then(function(res){
+        var c = (res && res.config) || {};
+        var sub = '未配置';
+        if (res && res.disabled) sub = '已被自动关闭，点进去检查地址';
+        else if (c.enabled && c.url) sub = '已开启 · ' + (c.type || '');
+        else if (c.url) sub = '已配置，未启用';
+        notifyRow.querySelector('i').textContent = sub;
+      }).catch(function(){});
 
       body.appendChild(el('div', 'sect-h', '账号管理'));
       var accBox = el('div', '');
@@ -2273,11 +2407,217 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
   }
 
-  /* ---------- 卡片右上角：单账号操作 ---------- */
+  /* ---------- 通知设置（0.6.0） ----------
+     粒度按用户要求：一次一键签到只推一条汇总。
+     渠道五个全给：企业微信 / 钉钉 / 飞书 / Bark / 自定义。
+     为什么必须在 Go 侧发：JS fetch 会带本机回环 Origin 头，
+     企业微信和钉钉的网关会直接拒收；而且 App 切后台时 JS 请求会被掐断。
+     所以前端只负责把「这一轮的结果」整理好交给 /api/notify。 */
+  var NOTIFY_TYPES = [
+    { id: 'wecom', name: '企业微信机器人', ph: 'qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...' },
+    { id: 'dingtalk', name: '钉钉机器人', ph: 'oapi.dingtalk.com/robot/send?access_token=...' },
+    { id: 'feishu', name: '飞书机器人', ph: 'open.feishu.cn/open-apis/bot/v2/hook/...' },
+    { id: 'bark', name: 'Bark（iOS 推送）', ph: 'api.day.app/你的Key' },
+    { id: 'custom', name: '自定义 Webhook', ph: 'example.com/hook' }
+  ];
+
+  function openNotify(){
+    var cfg = null;
+    openSheet('签到通知', '一次一键签到推一条汇总，不逐条刷屏。', function(body, close){
+      var box = el('div', '');
+      box.appendChild(el('div', 'sheet-sub', '加载中…'));
+      body.appendChild(box);
+
+      function loadCfg(){
+        j('/api/notify/config').then(function(res){
+          box.textContent = '';
+          if (!res || res.ok === false){
+            box.appendChild(el('div', 'sheet-sub', (res && res.error) || '读取失败'));
+            return;
+          }
+          cfg = res.config || {};
+          render(res);
+        }).catch(function(e){
+          box.textContent = '';
+          box.appendChild(el('div', 'sheet-sub', '读取失败：' + e.message));
+        });
+      }
+
+      function render(res){
+        // 后端自动停用横幅
+        if (res.disabled){
+          var warn = el('div', 'notice',
+            '通知已被自动关闭：' + (res.last_error || 'Webhook 连续失败') +
+            '。换个地址后点下面的「恢复通知」。');
+          box.appendChild(warn);
+        } else if (res.fail_streak >= 3){
+          var w2 = el('div', 'notice',
+            '最近连续 ' + res.fail_streak + ' 次推送失败：' + (res.last_error || '') +
+            '。请检查地址是否还有效。');
+          box.appendChild(w2);
+        }
+
+        // 总开关
+        var swRow = el('div', 'chk');
+        var swT = el('div', 'chk-t');
+        swT.appendChild(el('b', '', '启用通知'));
+        swT.appendChild(el('i', '', '关闭后不发送任何推送，签到照常执行'));
+        var sw = el('button', 'sw' + (cfg.enabled ? ' on' : ''));
+        sw.addEventListener('click', function(){
+          cfg.enabled = !cfg.enabled;
+          sw.className = 'sw' + (cfg.enabled ? ' on' : '');
+        });
+        swRow.appendChild(swT); swRow.appendChild(sw);
+        box.appendChild(swRow);
+
+        // 渠道
+        box.appendChild(el('div', 'sect-h', '渠道'));
+        var seg = el('div', 'seg');
+        seg.style.flexWrap = 'wrap';
+        NOTIFY_TYPES.forEach(function(t){
+          var b = el('button', 'seg-item' + (cfg.type === t.id ? ' on' : ''), t.name.split('（')[0]);
+          b.style.flex = '1 0 30%';
+          b.addEventListener('click', function(){
+            cfg.type = t.id;
+            var all = seg.querySelectorAll('.seg-item');
+            for (var i = 0; i < all.length; i++) all[i].classList.remove('on');
+            b.classList.add('on');
+            var picked = null;
+            for (var k = 0; k < NOTIFY_TYPES.length; k++) if (NOTIFY_TYPES[k].id === t.id) picked = NOTIFY_TYPES[k];
+            if (picked) fUrl.input.setAttribute('placeholder', picked.ph);
+          });
+          seg.appendChild(b);
+        });
+        box.appendChild(seg);
+
+        var cur = null;
+        for (var i = 0; i < NOTIFY_TYPES.length; i++) if (NOTIFY_TYPES[i].id === cfg.type) cur = NOTIFY_TYPES[i];
+        var fUrl = mkField('Webhook 地址', 'input', {
+          type: 'text', placeholder: (cur && cur.ph) || '粘贴完整地址',
+          value: cfg.url || ''
+        }, '在群机器人设置里复制「Webhook 地址」整段粘贴进来。');
+        fUrl.input.className = 'mono';
+        box.appendChild(fUrl.wrap);
+
+        // 触发时机
+        box.appendChild(el('div', 'sect-h', '什么时候推'));
+        function toggleRow(key, title, sub){
+          var row = el('div', 'chk');
+          var t = el('div', 'chk-t');
+          t.appendChild(el('b', '', title));
+          t.appendChild(el('i', '', sub));
+          var s = el('button', 'sw' + (cfg[key] ? ' on' : ''));
+          s.addEventListener('click', function(){
+            cfg[key] = !cfg[key];
+            s.className = 'sw' + (cfg[key] ? ' on' : '');
+          });
+          row.appendChild(t); row.appendChild(s);
+          box.appendChild(row);
+        }
+        toggleRow('on_manual', '手动一键签到后', '点底部按钮跑完一轮时推送');
+        toggleRow('on_start', '打开 App 自动签到后', '默认关闭：每次开 App 都推一条会很吵');
+        toggleRow('on_failure', '有账号签到失败时', '失败要第一时间知道，建议保持开启');
+        toggleRow('always', '一条都没签成也推', '全部已签/全部失败时也发一条，用来确认程序确实跑过');
+
+        // 操作
+        var btns = el('div', 'row-btns');
+        var btnSave = el('button', 'btn filled', '保存');
+        var btnTest = el('button', 'btn ghost', '发测试');
+        btns.appendChild(btnSave); btns.appendChild(btnTest);
+        box.appendChild(btns);
+
+        var out = el('div', 'sheet-sub', '');
+        out.style.minHeight = '20px';
+        box.appendChild(out);
+
+        if (res.disabled){
+          var btnReset = el('button', 'btn ghost', '恢复通知');
+          btnReset.style.width = '100%';
+          btnReset.addEventListener('click', function(){
+            post('/api/notify/reset', {}).then(function(r){
+              if (!r || r.ok === false){ toast((r && r.error) || '恢复失败'); return; }
+              toast('已恢复'); loadCfg();
+            }).catch(function(e){ toast('恢复失败：' + e.message); });
+          });
+          box.appendChild(btnReset);
+        }
+
+        function payload(){
+          return {
+            enabled: !!cfg.enabled, type: cfg.type || 'wecom',
+            url: fUrl.input.value.trim(),
+            on_success: true, on_failure: !!cfg.on_failure, always: !!cfg.always,
+            on_manual: !!cfg.on_manual, on_start: !!cfg.on_start
+          };
+        }
+
+        btnSave.addEventListener('click', function(){
+          var p = payload();
+          if (p.enabled && !p.url){ out.textContent = '启用通知需要先填 Webhook 地址'; return; }
+          btnSave.disabled = true; out.textContent = '正在保存…';
+          post('/api/notify/config', p).then(function(r){
+            btnSave.disabled = false;
+            if (!r || r.ok === false){ out.textContent = (r && r.error) || '保存失败'; return; }
+            out.textContent = '';
+            toast('已保存');
+          }).catch(function(e){ btnSave.disabled = false; out.textContent = '失败：' + e.message; });
+        });
+
+        btnTest.addEventListener('click', function(){
+          var p = payload();
+          if (!p.url){ out.textContent = '先填 Webhook 地址'; return; }
+          btnTest.disabled = true; out.textContent = '先保存再发送…';
+          post('/api/notify/config', p).then(function(r){
+            if (!r || r.ok === false){ btnTest.disabled = false; out.textContent = (r && r.error) || '保存失败'; return; }
+            out.textContent = '正在发送测试消息…';
+            return post('/api/notify/test', {});
+          }).then(function(r){
+            btnTest.disabled = false;
+            if (!r) return;
+            if (r.ok === false){ out.textContent = '发送失败：' + (r.error || '未知错误'); return; }
+            out.textContent = '测试消息已发出，看看群里收到没有。';
+          }).catch(function(e){ btnTest.disabled = false; out.textContent = '发送失败：' + e.message; });
+        });
+      }
+
+      loadCfg();
+    });
+  }
+
+  /* ---------- 卡片右上角 ···：单账号操作 ----------
+     用户反馈卡片上并排四个按钮太挤，而这三项都不是每次都要点的。
+     卡片上只留「签到」这一个高频动作，剩下的进菜单。 */
   function openAccountMenu(r){
-    openSheet(platformName(r.provider), r.label || r.account_id || '', function(body, close){
+    var name = platformName(r.provider);
+    openSheet(name, r.label || r.account_id || '', function(body, close){
+      function navItem(icon, title, sub, fn){
+        var b = el('button', 'sheet-item');
+        var ic = el('span', 'sheet-dot');
+        ic.style.background = 'var(--surface-3)';
+        ic.style.color = 'var(--on-surface-v)';
+        ic.innerHTML = ICON(icon);
+        ic.querySelector('svg').style.width = '19px';
+        ic.querySelector('svg').style.height = '19px';
+        b.appendChild(ic);
+        var tx = el('span', 'sheet-txt');
+        tx.appendChild(el('b', '', title));
+        tx.appendChild(el('i', '', sub));
+        b.appendChild(tx);
+        var ar = el('span', 'sheet-arw'); ar.innerHTML = ICON('arrow');
+        b.appendChild(ar);
+        b.addEventListener('click', function(){ close(); setTimeout(fn, 240); });
+        body.appendChild(b);
+        return b;
+      }
+
       var info = el('div', 'sheet-sub', '账号 ID：' + (r.account_id || '—'));
       body.appendChild(info);
+
+      if (r.has_tasks) navItem('task', '每日任务', '查看进度并领取奖励', function(){ openTasks(r); });
+      if (r.has_lottery) navItem('ticket', '抽奖', '查看剩余次数与奖品', function(){ openLottery(r); });
+      // 令牌只在支持 TokenManager 的平台出现（目前只有 AiPy），由 Meta.Tokens 决定
+      if (r.has_tokens) navItem('key', 'API 令牌', '管理平台调用密钥', function(){ openTokens(r); });
+
       var toggle = el('button', 'sheet-item');
       var tt = el('span', 'sheet-txt');
       tt.appendChild(el('b', '', r.enabled === false ? '启用此账号' : '停用此账号'));
@@ -2313,6 +2653,281 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       });
       body.appendChild(del);
     });
+  }
+
+  /* ---------- API 令牌管理（0.6.0，仅 AiPy 等支持平台） ----------
+     用户要求：列表要显示 model_limits / allow_ips，且可编辑。
+     删除保护由后端把关（key 正好是当前登录凭证时拒绝），前端在这里
+     把「正在使用」标出来，并把它做成一次明确的二次确认。 */
+  function openTokens(r){
+    var name = platformName(r.provider);
+    var box = null, inUse = '', usable = false;
+
+    openSheet(name + ' · API 令牌', r.label || r.account_id || '', function(body, close){
+      var tip = el('div', 'notice',
+        '令牌是平台对外发放的调用密钥（sk- 开头），和登录凭据是两回事。' +
+        '完整的 key 只在创建时出现一次，之后只显示首尾几位。');
+      body.appendChild(tip);
+
+      var bar = el('div', 'row-btns');
+      var btnNew = el('button', 'btn filled', '新建令牌');
+      var btnRe = el('button', 'btn ghost', '刷新');
+      bar.appendChild(btnNew); bar.appendChild(btnRe);
+      body.appendChild(bar);
+
+      box = el('div', '');
+      box.style.marginTop = '12px';
+      body.appendChild(box);
+
+      btnRe.addEventListener('click', function(){ href(); });
+      btnNew.addEventListener('click', function(){
+        if (!usable){
+          toast('当前账号没有可用的登录凭据，无法管理令牌');
+          return;
+        }
+        openTokenEdit(r, null, function(){ href(); });
+      });
+
+      function href(){ reload(); }
+
+      function reload(){
+        box.textContent = '';
+        box.appendChild(el('div', 'sheet-sub', '加载中…'));
+        j('/api/tokens?provider=' + encodeURIComponent(r.provider) +
+          '&account=' + encodeURIComponent(r.account_id)).then(function(res){
+          box.textContent = '';
+          if (!res || res.ok === false){
+            box.appendChild(el('div', 'sheet-sub', (res && res.error) || '读取失败'));
+            return;
+          }
+          inUse = res.in_use_key || '';
+          usable = !!res.usable;
+          renderList(res.tokens || []);
+        }).catch(function(e){
+          box.textContent = '';
+          box.appendChild(el('div', 'sheet-sub', '读取失败：' + e.message));
+        });
+      }
+
+      function maskKey(k){
+        if (!k) return '（创建时未返 key，可能已失效）';
+        if (k.length <= 14) return k;
+        return k.slice(0, 7) + '····' + k.slice(-4);
+      }
+
+      function renderList(list){
+        if (!list.length){
+          box.appendChild(el('div', 'sheet-sub', '还没有令牌。点「新建令牌」创建一条。'));
+          return;
+        }
+        // 在用且在启用的排前面：用户最关心「我这条还能用吗」
+        list.sort(function(a, b){
+          var ai = inUse && a.key === inUse ? 1 : 0;
+          var bi = inUse && b.key === inUse ? 1 : 0;
+          if (ai !== bi) return bi - ai;
+          return (b.created_time || 0) - (a.created_time || 0);
+        });
+        list.forEach(function(t){
+          var card = el('div', 'tok' + (t.status === 1 ? '' : ' off'));
+
+          var h = el('div', 'tok-h');
+          var nm = el('b', '', t.name || '未命名');
+          var st = el('span', 'st', t.status === 1 ? '启用' : '禁用');
+          h.appendChild(nm); h.appendChild(st);
+          if (inUse && t.key === inUse){
+            var tag = el('span', 'st', '在用');
+            tag.style.background = 'var(--primary-c)';
+            tag.style.color = 'var(--on-primary-c)';
+            h.appendChild(tag);
+          }
+          card.appendChild(h);
+
+          card.appendChild(el('div', 'tok-key', maskKey(t.key)));
+
+          var meta = el('div', 'tok-meta');
+          var quota = t.unlimited_quota ? '不限额度' :
+            ('剩余 ' + fmt(t.remain_quota) + ' / 已用 ' + fmt(t.used_quota));
+          var exp = t.expired_time < 0 ? '永不过期' : ('到期 ' + fmtDay(t.expired_time));
+          meta.appendChild(el('b', '', quota));
+          meta.appendChild(document.createTextNode(' · ' + exp));
+          card.appendChild(meta);
+
+          if (t.model_limits) card.appendChild(el('div', 'tok-lim', '模型限制：' + t.model_limits));
+          if (t.allow_ips) card.appendChild(el('div', 'tok-lim', 'IP 白名单：' + t.allow_ips));
+
+          var act = el('div', 'tok-act');
+
+          var bEdit = el('button', 'tok-btn', '编辑');
+          bEdit.addEventListener('click', function(){
+            openTokenEdit(r, t, function(){ reload(); });
+          });
+          act.appendChild(bEdit);
+
+          var bSw = el('button', 'tok-btn', t.status === 1 ? '禁用' : '启用');
+          bSw.addEventListener('click', function(){
+            bSw.disabled = true;
+            post('/api/tokens/status', {
+              provider: r.provider, account: r.account_id, id: t.id,
+              status: t.status === 1 ? 2 : 1
+            }).then(function(res){
+              bSw.disabled = false;
+              if (!res || res.ok === false){ toast((res && res.error) || '操作失败'); return; }
+              toast(t.status === 1 ? '已禁用' : '已启用');
+              reload();
+            }).catch(function(e){ bSw.disabled = false; toast('操作失败：' + e.message); });
+          });
+          act.appendChild(bSw);
+
+          // 删除：两段式。第一下 armed，第二下才真删；若后端回 in_use
+          // 再弹一次「确实要删」的最后机会（force=true）。
+          var armed = false, timer = null;
+          var bDel = el('button', 'tok-btn danger', '删除');
+          bDel.addEventListener('click', function(){
+            if (!armed){
+              armed = true; bDel.textContent = '确认删除';
+              timer = setTimeout(function(){ armed = false; bDel.textContent = '删除'; }, 4000);
+              return;
+            }
+            clearTimeout(timer);
+            doDelete(t, false);
+          });
+          act.appendChild(bDel);
+          card.appendChild(act);
+          box.appendChild(card);
+        });
+      }
+
+      function doDelete(t, force){
+        post('/api/tokens/delete', {
+          provider: r.provider, account: r.account_id, id: t.id, key: t.key, force: !!force
+        }).then(function(res){
+          if (res && res.in_use){
+            // 后端判定「这条正是当前登录凭证」。再问一次，说明后果。
+            var ok = window.confirm(
+              '这条令牌正是该账号当前登录使用的凭证。\n删除后账号会立刻失效，需要重新登录。\n\n确实要删除吗？');
+            if (ok) doDelete(t, true);
+            else toast('已取消');
+            return;
+          }
+          if (!res || res.ok === false){ toast((res && res.error) || '删除失败'); return; }
+          toast('已删除');
+          reload();
+        }).catch(function(e){ toast('删除失败：' + e.message); });
+      }
+
+      reload();
+    });
+  }
+
+  function fmtDay(sec){
+    if (!sec) return '—';
+    var d = new Date(sec * 1000);
+    function p(n){ return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  /* 新建 / 编辑令牌。t 为 null 表示新建。 */
+  function openTokenEdit(r, t, done){
+    var isNew = !t;
+    openSheet(isNew ? '新建令牌' : '编辑令牌',
+      isNew ? '名称必填；其余留空表示沿用平台默认。' : ('令牌 #' + t.id),
+      function(body, close){
+        var fName = mkField('名称', 'input', {
+          type: 'text', placeholder: '例如：手机端', value: t ? (t.name || '') : ''
+        });
+        var fQuota = mkField('额度（选填）', 'input', {
+          type: 'text', placeholder: '留空 = 不限',
+          value: t && !t.unlimited_quota ? String(t.remain_quota || '') : ''
+        }, '填数字表示剩余可用额度；留空则不限额度。');
+        var fModel = mkField('模型限制（选填）', 'input', {
+          type: 'text', placeholder: '例如：gpt-4o,claude-3-5',
+          value: t ? (t.model_limits || '') : ''
+        }, '逗号分隔。留空表示不限制可用模型。');
+        var fIPs = mkField('IP 白名单（选填）', 'input', {
+          type: 'text', placeholder: '例如：1.2.3.4,5.6.7.*',
+          value: t ? (t.allow_ips || '') : ''
+        }, '逗号分隔，支持前缀匹配。留空表示不限制来源 IP。');
+
+        [fName.wrap, fQuota.wrap, fModel.wrap, fIPs.wrap].forEach(function(w){ body.appendChild(w); });
+
+        // 有效期：编辑时不改（改期是低频且容易误操作的事），新建时给默认值
+        var expHint = el('div', 'sheet-sub', '有效期：' + (isNew ? '默认永不过期' : (t.expired_time < 0 ? '永不过期' : fmtDay(t.expired_time))));
+        expHint.style.paddingTop = '0';
+        body.appendChild(expHint);
+
+        var out = el('div', 'sheet-sub', '');
+        out.style.minHeight = '20px';
+        body.appendChild(out);
+
+        var btns = el('div', 'row-btns');
+        var btnSave = el('button', 'btn filled', isNew ? '创建' : '保存');
+        btns.appendChild(btnSave);
+        body.appendChild(btns);
+
+        btnSave.addEventListener('click', function(){
+          var nm = fName.input.value.trim();
+          if (!nm){ out.textContent = '名称不能为空'; return; }
+          var q = fQuota.input.value.trim();
+          var quota = q === '' ? 0 : Number(q);
+          if (q !== '' && (isNaN(quota) || quota < 0)){ out.textContent = '额度要填非负数字，或留空'; return; }
+
+          var payload = {
+            provider: r.provider, account: r.account_id,
+            token: {
+              name: nm,
+              remain_quota: quota,
+              unlimited_quota: q === '',
+              model_limits: fModel.input.value.trim(),
+              allow_ips: fIPs.input.value.trim()
+            }
+          };
+          if (!isNew) payload.token.id = t.id;
+
+          btnSave.disabled = true;
+          out.textContent = isNew ? '正在创建…' : '正在保存…';
+          post('/api/tokens/save', payload).then(function(res){
+            btnSave.disabled = false;
+            if (!res || res.ok === false){ out.textContent = (res && res.error) || '操作失败'; return; }
+            if (res.created && res.token && res.token.key){
+              // 完整 key 只在这里出现一次，必须让用户看得见、能复制
+              showNewKey(close, res.token);
+              done();
+              return;
+            }
+            toast('已保存');
+            close();
+            done();
+          }).catch(function(e){
+            btnSave.disabled = false; out.textContent = '失败：' + e.message;
+          });
+        });
+      });
+  }
+
+  /* 新建成功后单独弹一次，把完整 key 摆出来并可一键复制。 */
+  function showNewKey(prevClose, tok){
+    try { prevClose(); } catch (e) {}
+    setTimeout(function(){
+      openSheet('令牌已创建',
+        '这是唯一一次显示完整 key 的机会，请现在复制保存。',
+        function(body, close){
+          var f = mkField('完整 key', 'textarea', { readonly: 'readonly', rows: '3' });
+          f.input.className = 'mono';
+          f.input.value = tok.key || '';
+          body.appendChild(f.wrap);
+
+          var btns = el('div', 'row-btns');
+          var btnCopy = el('button', 'btn filled', '复制 key');
+          var btnOk = el('button', 'btn ghost', '我已保存');
+          btns.appendChild(btnCopy); btns.appendChild(btnOk);
+          body.appendChild(btns);
+
+          btnCopy.addEventListener('click', function(){
+            copyText(f.input);
+          });
+          btnOk.addEventListener('click', close);
+        });
+    }, 260);
   }
 
   // 让壳层打开官方登录页。
@@ -2528,7 +3143,13 @@ function ICON(name){
     // 抽奖：奖池里的票根（齿轮状的太阳/齿轮都不合适，用票根最直观）
     ticket:'<path d="M4 8.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1.6a2 2 0 0 0 0 3.8v1.6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-1.6a2 2 0 0 0 0-3.8z"/><path d="M13.5 7.5v9" stroke-dasharray="2 2.4"/>',
     trophy:'<path d="M8 4.5h8v4a4 4 0 0 1-8 0z"/><path d="M8 5.5H5.5v1.5A3 3 0 0 0 8 10"/><path d="M16 5.5h2.5v1.5A3 3 0 0 1 16 10"/><path d="M12 12.5v3.5"/><path d="M8.5 19.5h7"/>',
-    grip:'<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>'
+    grip:'<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
+    // API 令牌：钥匙。环在左上、齿朝右下，和「盾牌 / 锁」区分开。
+    key:'<circle cx="8.5" cy="8.5" r="3.6"/><path d="M11.1 11.1L19 19"/><path d="M16.2 16.2l2-2"/>',
+    // 通知：铃铛
+    bell:'<path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 4 1.4 5.4 1.9 6.2.2.3 0 .8-.4.8H5c-.4 0-.6-.5-.4-.8.5-.8 1.9-2.2 1.9-6.2z"/><path d="M10 20.2a2.2 2.2 0 0 0 4 0"/>',
+    // 复制：两张叠放的纸
+    copy:'<rect x="8.5" y="8.5" width="11" height="11" rx="2.6"/><path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/>'
   };
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
 }

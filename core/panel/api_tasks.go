@@ -2,10 +2,13 @@ package panel
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
 	"github.com/ElyYinLi/aipoints-mobile/core/provider"
 )
 
@@ -70,8 +73,10 @@ func (s *Server) handleTaskClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Account  string `json:"account"`
-		TaskType string `json:"task_type"`
+		Account    string `json:"account"`
+		TaskType   string `json:"task_type"`
+		Provider   string `json:"provider"`
+		IgnoreMemo bool   `json:"ignore_memo"`
 	}
 	if err := readBody(r, &in); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
@@ -105,11 +110,41 @@ func (s *Server) handleTaskClaim(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": false, "error": "凭据损坏"})
 			return
 		}
+		// 本地去重：今天已经成功领过这一项就直接返回，不打上游。
+		// 上游 status 会滞后，只靠它挡不住重复申领（见 task_memo.go 注释）。
+		key := taskMemoKey(a.Provider, a.AccountID, in.TaskType)
+		if !in.IgnoreMemo && s.tasks != nil && s.tasks.seen(key) {
+			writeJSON(w, map[string]any{
+				"provider": a.Provider, "account_id": a.AccountID,
+				"ok": false, "already": true, "deduped": true,
+				"message": "今日已领取过该任务奖励",
+			})
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		res, terr := claimer.ClaimTask(ctx, cred, in.TaskType)
 		if terr != nil {
 			res.Error = terr.Error()
+			res.Kind = provider.AsAPIError(terr).Kind
+		}
+		if res.Provider == "" {
+			res.Provider = a.Provider
+		}
+		if res.AccountID == "" {
+			res.AccountID = a.AccountID
+		}
+		// 只有真拿到奖励才记账。上游返回 0 视为没领到（多半已领过或状态已变），
+		// 记下来会让用户以为到账——这是 aipy-checkin v1.3.3 修掉的假账。
+		if res.OK && res.Gain > 0 {
+			if s.tasks != nil {
+				s.tasks.mark(key)
+			}
+			httpx.AddLog(httpx.LogEntry{
+				Level: "info", Scope: "task",
+				Msg: fmt.Sprintf("领取任务奖励 %s/%s %s +%s %s",
+					a.Provider, a.AccountID, in.TaskType, fmtGainNum(res.Gain), res.Unit),
+			})
 		}
 		writeJSON(w, res)
 		return
@@ -199,4 +234,10 @@ func (s *Server) handleTaskClaimAll(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{"ok": true, "results": out})
+}
+
+// fmtGainNum 去掉无意义的小数位：1.5 → "1.5"，2 → "2"，0.04 → "0.04"。
+// 日志里直接 %v 会打出 0.04000000000000001 这种浮点噪声。
+func fmtGainNum(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }

@@ -62,6 +62,9 @@ func (r *Registry) All() []Meta {
 		if _, ok := p.(LotteryProvider); ok {
 			m.Lottery = true
 		}
+		if _, ok := p.(TokenManager); ok {
+			m.Tokens = true
+		}
 		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

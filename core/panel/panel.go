@@ -47,6 +47,16 @@ type Server struct {
 	// gains 记住每个账号「今天签到拿了多少」，用于状态行显示「今日已签 +N 积分」。
 	// 平台接口不一定回这个数，所以本地兜一层；跨天自动失效。
 	gains *gainMemo
+	// tasks 记住「今天已经成功领过哪些任务奖励」，用于阻断重复申领。
+	// 上游 status 会滞后，只靠它挡不住（见 task_memo.go）。
+	tasks *taskMemo
+	// busy 记录正在写上游的账号键 "provider|account"。
+	// 用户连点两下「一键签到」会起两个 goroutine 同时打上游，
+	// 这正是「请求太多容易黑号」的直接来源，必须串行化。
+	busyMu sync.Mutex
+	busy   map[string]bool
+	// notify 是结果通知（Webhook）配置与发送器。
+	notify *notifier
 }
 
 // New 构造面板。
@@ -57,9 +67,14 @@ func New(opt Options) *Server {
 	if opt.Reg == nil {
 		opt.Reg = provider.NewRegistry(httpx.New())
 	}
-	s := &Server{opt: opt, oauth: make(map[string]oauthPending)}
+	s := &Server{opt: opt, oauth: make(map[string]oauthPending), busy: make(map[string]bool)}
 	if opt.DataDir != "" {
 		s.gains = newGainMemo(opt.DataDir)
+		s.tasks = newTaskMemo(opt.DataDir)
+		s.notify = newNotifier(opt.DataDir)
+	} else {
+		s.tasks = newTaskMemo("")
+		s.notify = newNotifier("")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -70,6 +85,18 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
 	mux.HandleFunc("/api/tasks/claim_all", s.handleTaskClaimAll)
+
+	// 结果通知（Webhook）
+	mux.HandleFunc("/api/notify", s.handleNotify)
+	mux.HandleFunc("/api/notify/config", s.handleNotifyConfig)
+	mux.HandleFunc("/api/notify/test", s.handleNotifyTest)
+	mux.HandleFunc("/api/notify/reset", s.handleNotifyReset)
+
+	// API 令牌（密钥）管理，仅 AiPy Pro 平台支持
+	mux.HandleFunc("/api/tokens", s.handleTokens)
+	mux.HandleFunc("/api/tokens/save", s.handleTokenSave)
+	mux.HandleFunc("/api/tokens/delete", s.handleTokenDelete)
+	mux.HandleFunc("/api/tokens/status", s.handleTokenStatus)
 	// 抽奖：百度搭子签到后送抽奖机会，随「一键签到」一起抽掉；
 	// 另给卡片上的「抽奖」按钮提供查询剩余次数 / 手动抽一次的入口
 	// （用户要求能看见「还有几次、抽到了什么」，不能只有静默批量）。
@@ -304,6 +331,13 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCheckin 串行签到（同设备并发最容易被风控）。
+//
+// 三重约束：
+//  1. 串行：一个账号签完再下一个；
+//  2. 写后节流：真的发过 POST 才延时 1.2s；
+//  3. 账号级互斥：同一账号正在签时，第二次请求直接返回 skipped，
+//     不发第二个请求。用户连点两下「一键签到」是最常见的误操作，
+//     不挡的话就是双倍请求量——正是「请求太多容易黑号」的直接来源。
 func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	list, err := s.opt.Store.List()
 	if err != nil {
@@ -328,23 +362,16 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 			out = append(out, provider.Result{Provider: a.Provider, AccountID: a.AccountID, Error: "凭据损坏"})
 			continue
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		res, cerr := p.Checkin(ctx, cred)
-		cancel()
-		if cerr != nil {
-			res.Error = cerr.Error()
+		key := a.Provider + "|" + a.AccountID
+		if !s.acquire(key) {
+			out = append(out, provider.Result{
+				Provider: a.Provider, AccountID: a.AccountID,
+				Message: "该账号正在签到中，已跳过",
+			})
+			continue
 		}
-		if res.AccountID == "" {
-			res.AccountID = a.AccountID
-		}
-		if res.Provider == "" {
-			res.Provider = a.Provider
-		}
-		// 签到成功（含「已签」但明确了收益）时记住今天拿了多少，
-		// 后续每次查询都能把这句「今日已签 +N 积分」补全。
-		if res.OK && res.Gain > 0 {
-			s.gains.Set(res.Provider, res.AccountID, res.Gain)
-		}
+		res := s.checkinOne(r.Context(), p, a, cred)
+		s.release(key)
 		out = append(out, res)
 		// 只有真的发过写请求才需要间隔（防同设备批量写触发风控）。
 		// 登录失效 / 网络不通这类账号根本没写入，白等一秒多只会让「一键签到」显得卡。
@@ -353,6 +380,83 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, out)
+}
+
+// checkinOne 对一个账号执行「签到 → 二次核对」。
+//
+// 二次核对为什么必须有：上游偶尔会返回 200 且 success=true，但服务端并没有
+// 真记账（限流、灰度、并发覆盖都会这样）。不核对就会写一笔「成功但没到账」
+// 的假账，用户第二天发现积分没涨，比直接报失败更糟。
+//
+// 核对方式：签完再查一次 Query，看 CheckedIn 是否真的变成 true。
+func (s *Server) checkinOne(ctx context.Context, p provider.Provider, a store.Account, cred provider.Credential) provider.Result {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, cerr := p.Checkin(ctx, cred)
+	if cerr != nil {
+		res.Error = cerr.Error()
+		res.Kind = provider.AsAPIError(cerr).Kind
+	}
+	if res.AccountID == "" {
+		res.AccountID = a.AccountID
+	}
+	if res.Provider == "" {
+		res.Provider = a.Provider
+	}
+	// 只有「真的提交了写请求且声称成功」才值得回查。
+	// 已签 / 失败 / 风控都需要查——那三种查了也是白花一次请求。
+	if res.OK && !res.Already && res.Error == "" {
+		if !s.confirmCheckin(ctx, p, cred) {
+			res.OK = false
+			res.Kind = provider.ErrUnknown
+			res.Message = "签到请求已提交，但未能确认到账，请稍后下拉刷新核对"
+			if res.Error == "" {
+				res.Error = res.Message
+			}
+			return res
+		}
+	}
+	// 签到成功（含「已签」但明确了收益）时记住今天拿了多少，
+	// 后续每次查询都能把这句「今日已签 +N 积分」补全。
+	if res.OK && res.Gain > 0 {
+		s.gains.Set(res.Provider, res.AccountID, res.Gain)
+	}
+	return res
+}
+
+// confirmCheckin 二次核对：以服务端状态为准。
+//
+// 回查本身失败（网络抖动）时不判定为「没到账」——那会把成功误报成失败，
+// 只能算「无法确认」，保持原结果并交给用户下拉刷新。这里返回 true 表示
+// 「没发现反证」。
+func (s *Server) confirmCheckin(ctx context.Context, p provider.Provider, cred provider.Credential) bool {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	snap, err := p.Query(cctx, cred)
+	if err != nil {
+		return true
+	}
+	if snap.Error != "" {
+		return true
+	}
+	return snap.CheckedIn
+}
+
+// acquire 尝试占用某账号的签到权。已被占用返回 false。
+func (s *Server) acquire(key string) bool {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	if s.busy[key] {
+		return false
+	}
+	s.busy[key] = true
+	return true
+}
+
+func (s *Server) release(key string) {
+	s.busyMu.Lock()
+	delete(s.busy, key)
+	s.busyMu.Unlock()
 }
 
 // wroteRemote 判断本次签到是否真的打到了上游的写接口。
