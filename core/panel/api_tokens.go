@@ -88,9 +88,17 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	// 当前账号正在用的那条 key（可能是空）。
 	inUse := strings.TrimSpace(cred.AccessToken)
+	// usable 表示「这个账号有没有能调令牌接口的凭据」，**不是**「有没有令牌在用」。
+	//
+	// 0.6.0 写成 inUse != "" 是个严重误判：用 Cookie 登录的账号本来就没有
+	// AccessToken，于是 usable 恒为 false，前端点「新建令牌」直接弹一句
+	// 「当前账号没有可用的登录凭据，无法管理令牌」就 return ——
+	// 用户看到的就是「点新建没反应」。
+	// 实际能用 cookie 登录的账号管理令牌完全没问题。
+	usable := strings.TrimSpace(cred.Cookie) != "" || inUse != ""
 	writeJSON(w, map[string]any{
 		"ok": true, "provider": a.Provider, "account_id": a.AccountID,
-		"tokens": list, "in_use_key": inUse, "usable": inUse != "",
+		"tokens": list, "in_use_key": inUse, "usable": usable,
 	})
 }
 

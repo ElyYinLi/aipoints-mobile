@@ -752,3 +752,98 @@ func TestBusyKeyIncludesProvider(t *testing.T) {
 		t.Fatal("不同平台的同名账号不能共享锁")
 	}
 }
+
+// usable 必须反映「这个账号能不能调令牌接口」，而不是「有没有令牌正在用」。
+//
+// 回归 0.6.0 的 bug：usable 写成 inUse != ""，而 Cookie 登录的账号本来就没有
+// access_token，于是恒为 false，前端点「新建令牌」直接 return ——
+// 用户看到的就是「点新建没反应」。
+func TestTokensUsableWithCookieOnly(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"success":true,"data":{"items":[]}}`))
+	}))
+	defer up.Close()
+
+	// 只给 cookie，不给 access_token：这正是绝大多数用户的实际状态
+	_, srv := tokenTestSetup(t, up.URL, "")
+	resp, err := http.Get(srv.URL + "/api/tokens?provider=aipy&account=a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if u, _ := out["usable"].(bool); !u {
+		t.Fatalf("Cookie 登录的账号也应可管理令牌（usable=true），实际: %v", out)
+	}
+	if k, _ := out["in_use_key"].(string); k != "" {
+		t.Fatalf("没有 access_token 时 in_use_key 应为空，实际: %q", k)
+	}
+}
+
+// 列表必须把上游返回的 key 原样透出，不能在后端再做一次脱敏。
+//
+// 前端要靠这个字段显示与复制；后端若先截断，前端拿到的就是残缺串。
+func TestTokensListKeepsFullKey(t *testing.T) {
+	const full = "sk-abcdefghijklmnopqrstuvwxyz012345"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"success":true,"data":{"items":[
+			{"id":7,"name":"完整","key":"` + full + `","status":1,"expired_time":-1}
+		]}}`))
+	}))
+	defer up.Close()
+
+	_, srv := tokenTestSetup(t, up.URL, "")
+	resp, err := http.Get(srv.URL + "/api/tokens?provider=aipy&account=a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Tokens []provider.APIToken `json:"tokens"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if len(out.Tokens) != 1 {
+		t.Fatalf("应返回 1 条: %v", out)
+	}
+	if out.Tokens[0].Key != full {
+		t.Fatalf("key 必须完整透出，期望 %q 实际 %q", full, out.Tokens[0].Key)
+	}
+}
+
+// 全部已签的一轮也必须能上报，否则「开关全开却收不到推送」。
+//
+// 回归 0.6.1 的 bug：stat.lines 只在逐个签到的循环里填充，循环只遍历未签账号，
+// 账号全签时 lines 为空，pushSummary 直接 return，请求根本没发出去。
+// 前端兜底逻辑见 index.go 的 pushSummary；这里守住后端这一侧的语义：
+// 「全部 already」不算失败，应被正常推送（always / on_manual 打开时）。
+func TestNotifySendsWhenAllAlready(t *testing.T) {
+	var hit int
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit++
+		w.Write([]byte(`{}`))
+	}))
+	defer hook.Close()
+
+	n := newNotifier("")
+	if err := n.save(NotifyConfig{
+		Enabled: true, Type: "wecom", URL: hook.URL,
+		OnManual: true, Always: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := NotifyPayload{
+		Trigger: "manual",
+		Accounts: []NotifyAccountLine{
+			{Provider: "aipy", Label: "甲", Status: "already", Message: "今日已签"},
+			{Provider: "dumate", Label: "乙", Status: "already", Message: "今日已签"},
+		},
+		Summary: "新签 0，已签 2",
+	}
+	if err := n.send(context.Background(), p, false); err != nil {
+		t.Fatalf("全部已签也应推送: %v", err)
+	}
+	if hit != 1 {
+		t.Fatalf("应发出 1 次请求，实际 %d", hit)
+	}
+}

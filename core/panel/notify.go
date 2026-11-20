@@ -277,7 +277,10 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 		}
 		// 按触发源过滤：启动签到默认不推，避免一天开几次 App 收几条
 		if p.Trigger == "start" && !cfg.OnStart {
-			return errSkipf("未开启「打开 App 后推送」")
+			// 0.6.1：这条以前只是静默跳过，用户在 iOS 上完全不知道自己
+			// 「平时打开 App 那一轮」被这个开关挡掉了——他看到的现象是
+			// 「发测试收得到，正常签到收不到」。把原因带回前端，设置页才解释得清。
+			return errSkipf("未开启「打开 App 自动签到后」推送")
 		}
 		if p.Trigger == "manual" && !cfg.OnManual {
 			return errSkipf("未开启「手动签到后推送」")

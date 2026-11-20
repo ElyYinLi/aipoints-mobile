@@ -512,7 +512,17 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .tok-key{
   font-family:var(--mono);font-size:11.5px;color:var(--on-surface-v);
   margin-top:3px;word-break:break-all;line-height:1.45;
+  flex:1;min-width:0;
 }
+/* key 行：key 本体 + 复制按钮。按钮用 flex:0 0 auto 保证不被长 key 挤没。 */
+.tok-key-row{display:flex;align-items:center;gap:8px;margin-top:3px}
+.tok-copy{
+  flex:0 0 auto;border:0;border-radius:var(--r-pill);
+  padding:4px 11px;font-size:11.5px;font-weight:640;
+  background:var(--surface-3);color:var(--primary);
+  transition:transform .14s,background .14s;
+}
+.tok-copy:active{transform:scale(.94);background:var(--surface-2)}
 .tok-meta{font-size:11.5px;color:var(--on-surface-v);margin-top:3px}
 .tok-meta b{font-weight:620;color:var(--on-surface)}
 .tok-lim{font-size:11px;color:var(--on-surface-v);margin-top:2px;word-break:break-all}
@@ -795,6 +805,63 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         .catch(function(){ toast('请长按文本框全选后复制'); });
     } else {
       toast('请长按文本框全选后复制');
+    }
+  }
+
+  // copyToken：复制一个字符串（令牌 key）。与 copyText 分开是因为那个只吃 textarea。
+  //
+  // 三层兜底，顺序有讲究：
+  //   1. navigator.clipboard —— 现代实现最干净，但 iOS 要求「用户手势直接触发」
+  //      且页面是安全上下文；本机回环地址在 WKWebView 里算安全，
+  //      可一旦被判定不是手势（比如 Promise 链里调用）就会 rejected。
+  //   2. 隐藏 textarea + execCommand('copy') —— WKWebView 上历史最稳的路径，
+  //      必须真的插入 DOM 并 select()，否则 iOS 复制不到。
+  //   3. 都不行就把 key 显示在一个可长按选中的 input 里，让用户自己复制，
+  //      而不是只弹一句「复制失败」让事情卡死。
+  function copyToken(text, btn){
+    if (!text) return;
+    var done = function(){
+      if (btn){ var old = btn.textContent; btn.textContent = '已复制';
+        setTimeout(function(){ btn.textContent = old; }, 1500); }
+      toast('已复制到剪贴板');
+    };
+    var fallback = function(){
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      // 必须可见地进 DOM 且不能 display:none，iOS 才能选中
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      var ok = false;
+      try {
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        ok = document.execCommand('copy');
+      } catch (e) {}
+      document.body.removeChild(ta);
+      if (ok){ done(); return; }
+      // 最后兜底：给一个可长按的输入框
+      openSheet('手动复制', '自动复制没成功，长按下面的内容全选复制。', function(body){
+        var inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = text;
+        inp.className = 'mono';
+        inp.style.width = '100%';
+        inp.style.padding = '10px';
+        inp.style.borderRadius = '10px';
+        inp.style.border = '1px solid var(--line)';
+        inp.style.background = 'var(--surface-2)';
+        inp.style.color = 'var(--text)';
+        body.appendChild(inp);
+        inp.focus(); inp.select();
+      });
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else {
+      fallback();
     }
   }
 
@@ -1184,10 +1251,26 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     stTxt.textContent = detailText(r);
     st.appendChild(stTxt);
 
-    // 右侧按钮组：0.6.0 起只留「签到」。
-    // 任务 / 抽奖 / 令牌 全部收进右上角 ··· 菜单（用户：「收进菜单，因为不常用」）。
+    // 右侧按钮组：任务 / 抽奖 直接摆出来，只有「API 令牌」收进 ··· 菜单。
+    //
+    // 0.6.1 修正：0.6.0 时把三个都收进菜单，理解错了用户的意思——
+    // 他说「收进 ··· 菜单，因为不常用」指的是令牌，任务和抽奖仍是高频入口，
+    // 藏进菜单等于每次多点两下。
     var btns = document.createElement('div');
     btns.className = 'c-actions';
+
+    if (r.has_tasks && !r.error){
+      btns.appendChild(pillBtn('task', '任务', 'task',
+        '查看 ' + (r.provider_name || r.provider || '') + ' 每日任务',
+        function(){ openTasks(r); }));
+    }
+    // 抽奖入口不判断 r.error：余额查询失败（比如刚过期）不代表抽奖也失败，
+    // 让用户点进去看真实状态，比事先替他判定更有用。
+    if (r.has_lottery){
+      btns.appendChild(pillBtn('ticket', '抽奖', 'lottery',
+        '查看 ' + (r.provider_name || r.provider || '') + ' 抽奖',
+        function(){ openLottery(r); }));
+    }
 
     var btn = document.createElement('button');
     btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
@@ -1232,9 +1315,24 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     row.appendChild(bal);
 
     var act = document.createElement('div'); act.className = 'row-act';
-    // 紧凑视图一行只放签到。额外功能（任务 / 抽奖 / 令牌）统一走 ··· 菜单，
-    // 否则一行挤三个按钮，点击区域会小于 32px，误触率明显上升。
-    if (r.has_tasks || r.has_lottery || r.has_tokens){
+    // 紧凑行：任务 / 抽奖给图标按钮（高频），令牌进 ···（低频）。
+    //
+    // 0.6.1 修正：0.6.0 把三个全收进菜单，理解偏了。紧凑行空间紧，
+    // 所以这里的任务 / 抽奖只露图标不带文字，宽度控制在 30px，
+    // 加上签到一共三个可点区域，仍不低于 30px 的误触阈值。
+    if (r.has_tasks && !r.error){
+      var tBtn = pillBtn('task', '', 'mute', '任务', function(){ openTasks(r); });
+      tBtn.style.width = '30px'; tBtn.style.height = '30px';
+      tBtn.innerHTML = ICON('task');
+      act.appendChild(tBtn);
+    }
+    if (r.has_lottery){
+      var lBtn = pillBtn('ticket', '', 'mute', '抽奖', function(){ openLottery(r); });
+      lBtn.style.width = '30px'; lBtn.style.height = '30px';
+      lBtn.innerHTML = ICON('ticket');
+      act.appendChild(lBtn);
+    }
+    if (r.has_tokens){
       var rowMore = document.createElement('button');
       rowMore.className = 'c-more';
       rowMore.style.width = '28px'; rowMore.style.height = '28px';
@@ -1662,13 +1760,38 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   //   4. 有 on_failure 需求的人要的是「一条都不动也让我知道」，所以这里
   //      只要这一轮确实扫过账号就上报（stat.lines 非空），空列表才跳过。
   function pushSummary(trigger, stat, sum){
-    if (!stat || !stat.lines || !stat.lines.length) return;
+    // 关键修复（0.6.1）：以前 lines 只在「逐个签到」的循环里填充，
+    // 而循环只遍历未签账号。账号全部已签时 todo 为空 → lines 为空 →
+    // 这里直接 return，请求根本没发出去。
+    //
+    // 表现就是用户说的「只有发测试能收到，开关全开也收不到」：
+    // 他日常打开 App 时账号早已签完，这一轮没有任何「签到动作」，
+    // 于是永远走不到推送。而发测试是 force=true 绕过了所有过滤。
+    //
+    // 现在补齐兜底：这轮确实扫过账号（state.rows 非空）但没有产生签到明细时，
+    // 按 rows 组装一份「全部已签」的明细照样上报，推不推由后端开关决定。
+    var lines = (stat && stat.lines) || [];
+    if (!lines.length){
+      var fallback = [];
+      for (var i = 0; i < state.rows.length; i++){
+        var r = state.rows[i];
+        if (r.error) continue;
+        fallback.push({
+          provider: r.provider, label: pname(r) + pshort(r),
+          status: r.checked_in ? 'already' : 'ok',
+          message: r.checked_in ? '今日已签' : '本轮无需处理',
+          gain: 0, unit: ''
+        });
+      }
+      if (!fallback.length) return;
+      lines = fallback;
+    }
     post('/api/notify', {
       trigger: trigger || 'manual',
-      accounts: stat.lines,
+      accounts: lines,
       summary: sum
     }).then(function(r){
-      if (r && r.error) console.warn('通知推送失败：' + r.error);
+      if (r && r.error && !r.skipped) console.warn('通知推送失败：' + r.error);
     }).catch(function(e){
       console.warn('通知推送失败：' + (e && e.message));
     });
@@ -2666,7 +2789,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     openSheet(name + ' · API 令牌', r.label || r.account_id || '', function(body, close){
       var tip = el('div', 'notice',
         '令牌是平台对外发放的调用密钥（sk- 开头），和登录凭据是两回事。' +
-        '完整的 key 只在创建时出现一次，之后只显示首尾几位。');
+        '点「复制」即可拷走整条 key。');
       body.appendChild(tip);
 
       var bar = el('div', 'row-btns');
@@ -2681,11 +2804,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
       btnRe.addEventListener('click', function(){ href(); });
       btnNew.addEventListener('click', function(){
-        if (!usable){
-          toast('当前账号没有可用的登录凭据，无法管理令牌');
-          return;
-        }
-        openTokenEdit(r, null, function(){ href(); });
+        // 不再用 usable 提前拦截。
+        //
+        // 0.6.0 在这里 if (!usable) 直接 toast 一句就 return —— 而 usable 当时
+        // 被后端错算成「有没有令牌在用」，Cookie 登录的账号恒为 false，
+        // 于是「点新建没有任何反应」（只闪一下 toast，看着像没点动）。
+        // 后端判定已修，这里也改成：拦不住就让用户真的试一次，
+        // 失败时把上游返回的真实原因显示出来，比一句笼统的提示有用得多。
+        openTokenCreate(r, function(){ href(); });
       });
 
       function href(){ reload(); }
@@ -2742,7 +2868,25 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           }
           card.appendChild(h);
 
-          card.appendChild(el('div', 'tok-key', maskKey(t.key)));
+          // key 行：完整显示 + 一键复制。
+          //
+          // 0.6.0 只显示首尾几位，用户的原话是「没有显示 apikey，也没有复制功能，
+          // 这就很傻」。列表接口返回的 key 本身就不完整（上游脱敏），
+          // 但只要是完整的一定要原样给出来——这是这条令牌唯一有用的信息，
+          // 藏起来等于让人没法用。复制按钮点一下即入剪贴板。
+          var keyRow = el('div', 'tok-key-row');
+          var keyTxt = el('div', 'tok-key', maskKey(t.key));
+          keyTxt.title = t.key || '';
+          keyRow.appendChild(keyTxt);
+          if (t.key){
+            var bCopy = el('button', 'tok-copy', '复制');
+            bCopy.setAttribute('aria-label', '复制令牌');
+            bCopy.addEventListener('click', function(){
+              copyToken(t.key, bCopy);
+            });
+            keyRow.appendChild(bCopy);
+          }
+          card.appendChild(keyRow);
 
           var meta = el('div', 'tok-meta');
           var quota = t.unlimited_quota ? '不限额度' :
@@ -2757,12 +2901,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
           var act = el('div', 'tok-act');
 
-          var bEdit = el('button', 'tok-btn', '编辑');
-          bEdit.addEventListener('click', function(){
-            openTokenEdit(r, t, function(){ reload(); });
-          });
-          act.appendChild(bEdit);
-
+          // 编辑已移除：令牌只有「名称 / 额度 / 限制」几个字段，
+          // 实际改动需求几乎为零，而编辑面板占满一屏反而把列表挤没了
+          // （用户原话：「编辑功能删掉吧，在这里确实没什么用」）。
+          // 真要改额度，删了重建更直接。
           var bSw = el('button', 'tok-btn', t.status === 1 ? '禁用' : '启用');
           bSw.addEventListener('click', function(){
             bSw.disabled = true;
@@ -2827,31 +2969,27 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   /* 新建 / 编辑令牌。t 为 null 表示新建。 */
-  function openTokenEdit(r, t, done){
-    var isNew = !t;
-    openSheet(isNew ? '新建令牌' : '编辑令牌',
-      isNew ? '名称必填；其余留空表示沿用平台默认。' : ('令牌 #' + t.id),
+  // 新建令牌。编辑功能已按用户要求移除——令牌的字段就那么几个，
+  // 真要改额度不如删了重建，而编辑面板占满一屏反而把列表挤没了。
+  function openTokenCreate(r, done){
+    openSheet('新建令牌', '名称必填；其余留空表示沿用平台默认。',
       function(body, close){
         var fName = mkField('名称', 'input', {
-          type: 'text', placeholder: '例如：手机端', value: t ? (t.name || '') : ''
+          type: 'text', placeholder: '例如：手机端'
         });
         var fQuota = mkField('额度（选填）', 'input', {
-          type: 'text', placeholder: '留空 = 不限',
-          value: t && !t.unlimited_quota ? String(t.remain_quota || '') : ''
+          type: 'text', placeholder: '留空 = 不限'
         }, '填数字表示剩余可用额度；留空则不限额度。');
         var fModel = mkField('模型限制（选填）', 'input', {
-          type: 'text', placeholder: '例如：gpt-4o,claude-3-5',
-          value: t ? (t.model_limits || '') : ''
+          type: 'text', placeholder: '例如：gpt-4o,claude-3-5'
         }, '逗号分隔。留空表示不限制可用模型。');
         var fIPs = mkField('IP 白名单（选填）', 'input', {
-          type: 'text', placeholder: '例如：1.2.3.4,5.6.7.*',
-          value: t ? (t.allow_ips || '') : ''
+          type: 'text', placeholder: '例如：1.2.3.4,5.6.7.*'
         }, '逗号分隔，支持前缀匹配。留空表示不限制来源 IP。');
 
         [fName.wrap, fQuota.wrap, fModel.wrap, fIPs.wrap].forEach(function(w){ body.appendChild(w); });
 
-        // 有效期：编辑时不改（改期是低频且容易误操作的事），新建时给默认值
-        var expHint = el('div', 'sheet-sub', '有效期：' + (isNew ? '默认永不过期' : (t.expired_time < 0 ? '永不过期' : fmtDay(t.expired_time))));
+        var expHint = el('div', 'sheet-sub', '有效期：默认永不过期');
         expHint.style.paddingTop = '0';
         body.appendChild(expHint);
 
@@ -2860,7 +2998,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         body.appendChild(out);
 
         var btns = el('div', 'row-btns');
-        var btnSave = el('button', 'btn filled', isNew ? '创建' : '保存');
+        var btnSave = el('button', 'btn filled', '创建');
         btns.appendChild(btnSave);
         body.appendChild(btns);
 
@@ -2871,7 +3009,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
           var quota = q === '' ? 0 : Number(q);
           if (q !== '' && (isNaN(quota) || quota < 0)){ out.textContent = '额度要填非负数字，或留空'; return; }
 
-          var payload = {
+          btnSave.disabled = true;
+          out.textContent = '正在创建…';
+          post('/api/tokens/save', {
             provider: r.provider, account: r.account_id,
             token: {
               name: nm,
@@ -2880,25 +3020,25 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
               model_limits: fModel.input.value.trim(),
               allow_ips: fIPs.input.value.trim()
             }
-          };
-          if (!isNew) payload.token.id = t.id;
-
-          btnSave.disabled = true;
-          out.textContent = isNew ? '正在创建…' : '正在保存…';
-          post('/api/tokens/save', payload).then(function(res){
+          }).then(function(res){
             btnSave.disabled = false;
-            if (!res || res.ok === false){ out.textContent = (res && res.error) || '操作失败'; return; }
+            if (!res || res.ok === false){
+              // 把上游的真实原因摊开：网络错误 / 权限不足 / 上游拒绝各不相同，
+              // 笼统一句「操作失败」等于让用户去猜。
+              out.textContent = (res && res.error) || '创建失败';
+              return;
+            }
             if (res.created && res.token && res.token.key){
-              // 完整 key 只在这里出现一次，必须让用户看得见、能复制
               showNewKey(close, res.token);
               done();
               return;
             }
-            toast('已保存');
+            toast('已创建');
             close();
             done();
           }).catch(function(e){
-            btnSave.disabled = false; out.textContent = '失败：' + e.message;
+            btnSave.disabled = false;
+            out.textContent = '失败：' + (e && e.message ? e.message : '网络错误');
           });
         });
       });
