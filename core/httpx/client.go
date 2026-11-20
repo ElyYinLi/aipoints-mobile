@@ -81,6 +81,19 @@ func (c *Client) DoJSON(ctx context.Context, method, url string, headers map[str
 	return out, nil
 }
 
+// LogOK 记录一条「请求成功」的日志。
+//
+// 为什么不放进 logResponse 一律记：一次一键签到会发出十几个成功请求，
+// 全记下来会把 400 条缓冲瞬间冲满，真出问题时反而翻不到。成功请求由调用方
+// **按需**记录——只在用户会追问「这一步到底跑没跑」的地方记
+// （签到、领任务、抽奖、推送），不做全量。
+func LogOK(scope, method, url string, status int, cost time.Duration) {
+	AddLog(LogEntry{
+		Level: "info", Scope: scope, Method: method, Path: LogPath(url),
+		Status: status, CostMS: cost.Milliseconds(), Msg: "成功",
+	})
+}
+
 // logResponse 给一次请求留一条日志。
 //
 // 只在「非 2xx」或「body 里 code != 0」时记 warn/error —— 正常查询每次都记会

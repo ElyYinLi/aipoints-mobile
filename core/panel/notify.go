@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
 )
 
 // notifier 负责「签到结果推送到企业微信 / 钉钉 / 飞书 / Bark / 自定义」。
@@ -75,6 +77,10 @@ type NotifyPayload struct {
 	// Summary 是前端已经算好的那句话（"新签 3，已签 1，失败 1｜任务 2 个 +50 灵石"）。
 	// 传空时后端自己按 Accounts 拼一个。
 	Summary string `json:"summary"`
+	// TZOffset 是「本机时间与 UTC 相差的分钟数」，取 JS 的 getTimezoneOffset()
+	// （东八区 = -480）。Go 在手机上读不到系统时区，只能由前端把它带上来，
+	// 否则正文里的时间会差 8 小时（0.6.2 的真实事故）。
+	TZOffset *int `json:"tz_offset"`
 }
 
 // notifyTypes 是支持的五种渠道。报文格式照 aipy-checkin 线上验证过的写法，
@@ -173,7 +179,7 @@ func (n *notifier) save(c NotifyConfig) error {
 // 两条硬规则：
 //  1. 失败必须置顶——手机上一屏放不下 6 个账号，失败混在中间要滑才看得见；
 //  2. 账号名用 label 而不是 account_id——account_id 可能是 hash 或手机号。
-func buildText(p NotifyPayload) (title, body string) {
+func buildText(p NotifyPayload, offsetMin *int) (title, body string) {
 	var fails, oks, alreadys []NotifyAccountLine
 	for _, a := range p.Accounts {
 		switch a.Status {
@@ -198,7 +204,13 @@ func buildText(p NotifyPayload) (title, body string) {
 	// 正文里不再重复标题：各渠道报文都是「标题 + 正文」拼起来的，
 	// 这里再写一遍用户看到的就是「积分矩阵 · 一键签到」连着出现两次。
 	var lines []string
-	lines = append(lines, time.Now().Format("2006-01-02 15:04"), "")
+	stamp, tzLabel := localNow(offsetMin)
+	if tzLabel != "" {
+		// 没拿到本机时区时才标出来：宁可写 UTC，也不能假装是本地时间
+		lines = append(lines, stamp.Format("2006-01-02 15:04")+" "+tzLabel, "")
+	} else {
+		lines = append(lines, stamp.Format("2006-01-02 15:04"), "")
+	}
 	render := func(flag string, list []NotifyAccountLine) {
 		for _, a := range list {
 			name := a.Label
@@ -229,7 +241,26 @@ func buildText(p NotifyPayload) (title, body string) {
 	return title, strings.Join(lines, "\n")
 }
 
-// payload 生成各渠道的请求体。五种格式各不相同，照抄线上验证过的写法。
+// localNow 返回带用户本地时区偏移的时间。
+//
+// 0.6.2 及以前这里直接用 time.Now()。Go 在移动端读不到系统时区（iOS 的 WKWebView
+// 与 gomobile 进程都没有 TZ 环境变量、/etc/localtime 也不存在），Go 一律当作 UTC，
+// 于是「7:26 签到」推出来是「23:26」——差整整 8 小时。
+//
+// 解决办法：不依赖 Go 的时区数据库。前端把「此刻本机的 UTC 偏移分钟数」
+// 一起传上来（JS 的 getTimezoneOffset 是最可信的来源），这里据此换算。
+// 没传时退化为 UTC，并在正文里显式标注，用户一眼能看出时区没生效。
+func localNow(offsetMin *int) (t time.Time, label string) {
+	now := time.Now()
+	if offsetMin == nil {
+		return now, "UTC"
+	}
+	// JS 的 getTimezoneOffset 是「UTC - 本地」，东八区返回 -480，所以符号要反过来
+	loc := time.FixedZone("local", -*offsetMin*60)
+	return now.In(loc), ""
+}
+
+// notifyPayload 生成各渠道的请求体。五种格式各不相同，照抄线上验证过的写法。
 func notifyPayload(kind, title, text string) []byte {
 	var b []byte
 	switch kind {
@@ -267,7 +298,7 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 	if !force {
 		if !cfg.Enabled || cfg.URL == "" || disabled {
 			// 未配置 / 已被停用：静默跳过，不打扰用户
-			return errSkipf("通知未启用或已被关闭")
+			return n.skip(p, "通知未启用或已被关闭")
 		}
 		hasFail := false
 		for _, a := range p.Accounts {
@@ -280,23 +311,23 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 			// 0.6.1：这条以前只是静默跳过，用户在 iOS 上完全不知道自己
 			// 「平时打开 App 那一轮」被这个开关挡掉了——他看到的现象是
 			// 「发测试收得到，正常签到收不到」。把原因带回前端，设置页才解释得清。
-			return errSkipf("未开启「打开 App 自动签到后」推送")
+			return n.skip(p, "未开启「打开 App 自动签到后」推送")
 		}
 		if p.Trigger == "manual" && !cfg.OnManual {
-			return errSkipf("未开启「手动签到后推送」")
+			return n.skip(p, "未开启「手动签到后推送」")
 		}
 		// Always 一票否决：用户明确说「没事也要告诉我」时不再看结果类型
 		if !cfg.Always {
 			if hasFail && !cfg.OnFailure {
-				return errSkipf("未开启「失败时推送」")
+				return n.skip(p, "未开启「失败时推送」")
 			}
 			if !hasFail && !cfg.OnSuccess {
-				return errSkipf("未开启「成功时推送」")
+				return n.skip(p, "未开启「成功时推送」")
 			}
 		}
 	}
 
-	title, body := buildText(p)
+	title, body := buildText(p, p.TZOffset)
 	// 强制脱敏：账号名里可能混进手机号/邮箱，摘要里可能有 URL
 	title = maskNotify(title)
 	body = maskNotify(body)
@@ -336,6 +367,12 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 	n.mu.Lock()
 	n.failStreak, n.lastErr = 0, ""
 	n.mu.Unlock()
+	// 成功也要留一条：否则「这次到底推没推」在日志里永远是空白，
+	// 用户只能靠手机上有没有收到去反推。
+	httpx.AddLog(httpx.LogEntry{
+		Level: "info", Scope: "notify",
+		Msg: fmt.Sprintf("推送成功（%s · %d 个账号）", triggerName(p.Trigger), len(p.Accounts)),
+	})
 	return nil
 }
 
@@ -356,6 +393,32 @@ func (e *skipError) Error() string { return e.reason }
 
 func errSkipf(reason string) error { return &skipError{reason: reason} }
 
+// skip 记一条 info 日志再返回 skipError。
+//
+// 为什么跳过也要留痕：用户报「开关全开却收不到推送」时，日志里如果只有出错的
+// HTTP 请求，就完全看不出「这次到底推没推、被哪一条挡了」。推送的每一次决策
+// （发了 / 跳过了 / 失败）都必须能在设置页的日志里看到，否则只能靠猜。
+func (n *notifier) skip(p NotifyPayload, reason string) error {
+	httpx.AddLog(httpx.LogEntry{
+		Level: "info", Scope: "notify",
+		Msg: fmt.Sprintf("跳过推送（%s）：%s", triggerName(p.Trigger), reason),
+	})
+	return errSkipf(reason)
+}
+
+// triggerName 把触发源翻成人话，日志里才好读。
+func triggerName(t string) string {
+	switch t {
+	case "start":
+		return "启动签到"
+	case "single":
+		return "单账号签到"
+	case "manual":
+		return "手动签到"
+	}
+	return t
+}
+
 // isSkip 判断是否属于「按配置跳过」。
 func isSkip(err error) bool {
 	var s *skipError
@@ -368,6 +431,7 @@ func (n *notifier) noteFailure(msg string) error {
 	n.failStreak++
 	n.lastErr = msg
 	n.mu.Unlock()
+	httpx.AddLog(httpx.LogEntry{Level: "error", Scope: "notify", Msg: "推送失败：" + msg})
 	return fmt.Errorf("%s", msg)
 }
 

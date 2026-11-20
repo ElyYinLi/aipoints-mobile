@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 )
 
@@ -17,10 +19,21 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p NotifyPayload
-	if err := readBody(r, &p); err != nil {
+	// 一次读、两次解：readBody 会把 Body 读完，不能再读第二遍。
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 2<<20))
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": "读取请求体失败: " + err.Error()})
+		return
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	// force 只给「设置页重发上次结果」用：那是用户亲手按的，不该被自动推送的开关拦住。
+	var extra struct {
+		Force bool `json:"force"`
+	}
+	_ = json.Unmarshal(raw, &extra)
 	if p.Trigger == "" {
 		p.Trigger = "manual"
 	}
@@ -34,11 +47,11 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	//   err == nil        → sent:true   真的发出去了
 	//   按配置跳过         → sent:false, skipped:true   用户自己关的，不算故障
 	//   真失败            → sent:false, error:"..."     地址错了/网络不通
-	err := s.notify.send(r.Context(), p, false)
-	out := map[string]any{"ok": true, "sent": err == nil}
-	if err != nil {
-		out["error"] = err.Error()
-		if isSkip(err) {
+	sendErr := s.notify.send(r.Context(), p, extra.Force)
+	out := map[string]any{"ok": true, "sent": sendErr == nil}
+	if sendErr != nil {
+		out["error"] = sendErr.Error()
+		if isSkip(sendErr) {
 			out["skipped"] = true
 		}
 	}

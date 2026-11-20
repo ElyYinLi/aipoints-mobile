@@ -1301,7 +1301,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   // 账号行（紧凑视图）：一行之内放完头像 / 名称 / 余额 / 操作
+  //
+  // compact 只用来控制「要不要渲染 ··· 令牌入口」：
+  // 紧凑行不放（挤在任务和签到中间像个多余的点），卡片视图的 ··· 菜单里照样能进。
   function rowOf(r){
+    var compact = true;
     var row = document.createElement('div');
     row.className = 'row-item' + (r.error ? ' err' : '');
     row.setAttribute('data-key', (r.provider || '') + '|' + (r.account_id || ''));
@@ -1353,7 +1357,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     if (r.has_lottery){
       act.appendChild(pillBtn('', '抽奖', 'mute', '抽奖', function(){ openLottery(r); }));
     }
-    if (r.has_tokens){
+    // 令牌入口在紧凑行里不再渲染 ···。
+    //
+    // 为什么：紧凑行本来就窄，而这个按钮只服务 AiPy 一个平台的低频操作，
+    // 塞在「任务/抽奖」和「签到」之间，看上去就像夹在两个按钮中间的
+    // 一个多余的点（用户的原话就是「任务跟一千（签到）中间还有三个点」）。
+    // 令牌在卡片视图的 ··· 菜单里一样能进，功能没少。
+    if (r.has_tokens && !compact){
       var rowMore = document.createElement('button');
       rowMore.className = 'c-more';
       rowMore.style.width = '26px'; rowMore.style.height = '26px';
@@ -1780,6 +1790,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   //   3. 推送本身失败绝不弹错、绝不影响签到结果，只在控制台留一行。
   //   4. 有 on_failure 需求的人要的是「一条都不动也让我知道」，所以这里
   //      只要这一轮确实扫过账号就上报（stat.lines 非空），空列表才跳过。
+  // 最近一次推送的明细，给设置页的「重发上次结果」用。
+  // 只放内存：它是诊断辅助，重启 App 后重新跑一轮就有新的，不必落盘。
+  var lastLines = [], lastSummary = '';
+
   function pushSummary(trigger, stat, sum){
     // 关键修复（0.6.1）：以前 lines 只在「逐个签到」的循环里填充，
     // 而循环只遍历未签账号。账号全部已签时 todo 为空 → lines 为空 →
@@ -1807,10 +1821,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       if (!fallback.length) return;
       lines = fallback;
     }
+    lastLines = lines; lastSummary = sum || '';
     post('/api/notify', {
       trigger: trigger || 'manual',
       accounts: lines,
-      summary: sum
+      summary: sum,
+      // 本机相对 UTC 的偏移分钟数（东八区是 -480）。Go 在手机上取不到系统时区，
+      // 不带这个字段推出去的时间会是 UTC，用户看到的「7:26 签到」变成「23:26」。
+      tz_offset: new Date().getTimezoneOffset()
     }).then(function(r){
       if (r && r.error && !r.skipped) console.warn('通知推送失败：' + r.error);
     }).catch(function(e){
@@ -2259,14 +2277,23 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
       /* ---------- 运行日志 ----------
          用户原话：「设置里添加日志功能，这样有问题了也容易快速定位。」
-         所以这里不做筛选器、不做级别开关，就是一条时间线：
-           时间 · 平台/HTTP · 路径 · 状态/业务码 · 消息
-         出问题时用户点进来看最上面几条，或者整段复制发出来，就能定位。
+         0.6.3 又提了一条更要紧的：「正常的时候一点日志都看不到，只能猜是哪个动作出的问题」——
+         所以现在**默认显示全部级别**（info 也记），并且在上面加「全部 / 只看异常」两个切换：
+           · 全部：把「启动签到」「跳过推送」「推送成功」这类关键动作也列出来，
+             用户能直接看到「它自己又跑了一轮」这种事实，而不是靠感觉；
+           · 只看异常：只留 warn / error，排查具体报错时用。
          日志在写入侧已脱敏（cookie/token 一律 ***），复制出去是安全的。 */
       body.appendChild(el('div', 'sect-h', '运行日志'));
-      var logHint = el('div', 'notice',
-        '只记录出错的请求和关键动作，最多保留 400 条，凭据一律脱敏，可直接复制发出去求助。');
+      var logHint = el('div', 'notice soft',
+        '记录关键动作与出错的请求，最多保留 400 条，凭据一律脱敏，可直接复制发出去。' +
+        '想看清「到底哪一步在跑」，切到「全部」。');
       body.appendChild(logHint);
+
+      var logBar = el('div', 'row-btns');
+      var btnLogAll = el('button', 'btn filled', '全部');
+      var btnLogErr = el('button', 'btn ghost', '只看异常');
+      logBar.appendChild(btnLogAll); logBar.appendChild(btnLogErr);
+      body.appendChild(logBar);
 
       var logBox = el('div', 'logbox');
       body.appendChild(logBox);
@@ -2281,6 +2308,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       body.appendChild(logBtns);
 
       var lastLogs = [];
+      // onlyErr=false 是默认：先让用户看见全部动作，这是他要的
+      var onlyErr = false;
+
+      function applyLogFilter(){
+        btnLogAll.className = 'btn ' + (onlyErr ? 'ghost' : 'filled');
+        btnLogErr.className = 'btn ' + (onlyErr ? 'filled' : 'ghost');
+      }
 
       // 网络错误的消息里常带完整 URL（Go 的 *url.Error 就这么拼），
       // 而路径上一行已经显示了，重复一长串只会把真正的原因挤出屏幕。
@@ -2317,19 +2351,35 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
       function renderLogs(){
         j('/api/logs?limit=200').then(function(res){
-          var logs = (res && res.logs) || [];
+          var all = (res && res.logs) || [];
+          var logs = onlyErr ? all.filter(function(e){
+            return e.level && e.level !== 'info';
+          }) : all;
           lastLogs = logs;
           logBox.textContent = '';
           if (!logs.length){
-            logBox.appendChild(el('div', 'logempty', '暂时没有异常记录。'));
+            logBox.appendChild(el('div', 'logempty',
+              onlyErr ? '没有异常的请求记录。' : '暂时没有日志。'));
             return;
           }
           for (var i = 0; i < logs.length; i++){ logBox.appendChild(logLine(logs[i])); }
+          // 最新的在最上面更容易看：这里滚动到底部（新记录在数组末尾）
+          logBox.scrollTop = logBox.scrollHeight;
         }).catch(function(e){
           logBox.textContent = '';
           logBox.appendChild(el('div', 'logempty', '读取日志失败：' + e.message));
         });
       }
+
+      applyLogFilter();
+      btnLogAll.addEventListener('click', function(){
+        if (!onlyErr) return;
+        onlyErr = false; applyLogFilter(); renderLogs();
+      });
+      btnLogErr.addEventListener('click', function(){
+        if (onlyErr) return;
+        onlyErr = true; applyLogFilter(); renderLogs();
+      });
 
       btnLogRefresh.addEventListener('click', function(){ renderLogs(); load(true); });
       btnLogClear.addEventListener('click', function(){
@@ -2571,6 +2621,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       var box = el('div', '');
       box.appendChild(el('div', 'sheet-sub', '加载中…'));
       body.appendChild(box);
+      // 重发按钮在 render() 里重建，这里先声明，绑定放在末尾
+      var btnResend = null;
 
       function loadCfg(){
         j('/api/notify/config').then(function(res){
@@ -2667,7 +2719,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         var btns = el('div', 'row-btns');
         var btnSave = el('button', 'btn filled', '保存');
         var btnTest = el('button', 'btn ghost', '发测试');
-        btns.appendChild(btnSave); btns.appendChild(btnTest);
+        btnResend = el('button', 'btn ghost', '重发上次结果');
+        btns.appendChild(btnSave); btns.appendChild(btnTest); btns.appendChild(btnResend);
         box.appendChild(btns);
 
         var out = el('div', 'sheet-sub', '');
@@ -2722,6 +2775,32 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
             out.textContent = '测试消息已发出，看看群里收到没有。';
           }).catch(function(e){ btnTest.disabled = false; out.textContent = '发送失败：' + e.message; });
         });
+
+        // 「重发上次结果」
+        //
+        // 加这个按钮的原因：推送只有一个触发点是「一轮签到结束」，而那一轮到底
+        // 走没走、被哪个开关挡了，用户完全看不到。有了它，任何时刻都能拿最近一次
+        // 的明细（lastLines）原样再发一条：能发出去 = 配置和网络都没问题；
+        // 发不出去 = 错误就在这一下里，配合下面的运行日志一眼定位。
+        // force=true，绕过所有开关——这是手动动作，不是自动推送。
+        if (btnResend){
+          btnResend.addEventListener('click', function(){
+            if (!lastLines.length){
+              out.textContent = '还没有可重发的记录：先回主页跑一次签到。';
+              return;
+            }
+            btnResend.disabled = true; out.textContent = '正在重发上次结果…';
+            post('/api/notify', {
+              trigger: 'manual', accounts: lastLines, summary: lastSummary,
+              tz_offset: new Date().getTimezoneOffset(), force: true
+            }).then(function(r){
+              btnResend.disabled = false;
+              if (!r || r.ok === false){ out.textContent = '重发失败：' + ((r && r.error) || '未知错误'); return; }
+              if (r.sent === false){ out.textContent = '重发未送达：' + (r.error || '未知原因'); return; }
+              out.textContent = '已重发（' + lastLines.length + ' 个账号），看看收到没有。';
+            }).catch(function(e){ btnResend.disabled = false; out.textContent = '重发失败：' + e.message; });
+          });
+        }
       }
 
       loadCfg();

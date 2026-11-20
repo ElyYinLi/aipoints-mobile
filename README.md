@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.6.2-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.6.3-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">

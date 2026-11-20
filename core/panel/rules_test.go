@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
 	"github.com/ElyYinLi/aipoints-mobile/core/provider"
@@ -442,7 +443,7 @@ func TestBuildTextPutsFailuresFirst(t *testing.T) {
 			{Provider: "dumate", Label: "B", Status: "fail", Message: "登录失效"},
 			{Provider: "trae", Label: "C", Status: "already", Message: "已签"},
 		},
-	})
+	}, nil)
 	idxFail := strings.Index(body, "B：")
 	idxOK := strings.Index(body, "A：")
 	if idxFail < 0 || idxOK < 0 {
@@ -845,5 +846,71 @@ func TestNotifySendsWhenAllAlready(t *testing.T) {
 	}
 	if hit != 1 {
 		t.Fatalf("应发出 1 次请求，实际 %d", hit)
+	}
+}
+
+// 推文里的时间必须是本机时区。
+//
+// 0.6.2 的真实事故：用户 7:26 签到，推送正文写的是 23:26——差整整 8 小时。
+// 原因是 Go 在移动端读不到系统时区，time.Now() 直接当 UTC 用了。
+// 现在时区偏移由前端 getTimezoneOffset() 带上来（东八区 = -480）。
+func TestBuildTextUsesLocalTimezone(t *testing.T) {
+	off := -480 // 东八区
+	_, body := buildText(NotifyPayload{
+		Trigger: "manual",
+		Accounts: []NotifyAccountLine{
+			{Provider: "aipy", Label: "甲", Status: "ok", Message: "签到成功"},
+		},
+	}, &off)
+	want := time.Now().In(time.FixedZone("local", 8*3600)).Format("2006-01-02 15:04")
+	if !strings.Contains(body, want) {
+		t.Fatalf("正文时间应为本地 %s，实际:\n%s", want, body)
+	}
+	// 不能带 UTC 标注：那是「时区没生效」的兜底提示
+	if strings.Contains(body, "UTC") {
+		t.Fatalf("拿到偏移时不该标注 UTC:\n%s", body)
+	}
+}
+
+// 没拿到偏移时要显式标 UTC，而不是假装本地时间。
+func TestBuildTextMarksUTCWhenNoOffset(t *testing.T) {
+	_, body := buildText(NotifyPayload{
+		Trigger:  "manual",
+		Accounts: []NotifyAccountLine{{Provider: "aipy", Label: "甲", Status: "ok"}},
+	}, nil)
+	if !strings.Contains(body, "UTC") {
+		t.Fatalf("没有时区信息时应标注 UTC:\n%s", body)
+	}
+}
+
+// 跳过推送必须留日志。
+//
+// 用户的原话：「正常的时候一点日志都看不到，一直猜是哪个动作出了问题」。
+// 推送的每一次决策（发了 / 跳过了 / 失败）都要能在设置页看到。
+func TestNotifySkipIsLogged(t *testing.T) {
+	httpx.ClearLogs()
+	defer httpx.ClearLogs()
+
+	n := newNotifier("")
+	if err := n.save(NotifyConfig{Enabled: true, Type: "wecom", URL: "http://127.0.0.1:1/hook", OnStart: false}); err != nil {
+		t.Fatal(err)
+	}
+	p := NotifyPayload{
+		Trigger:  "start",
+		Accounts: []NotifyAccountLine{{Provider: "aipy", Label: "甲", Status: "already"}},
+	}
+	err := n.send(context.Background(), p, false)
+	if err == nil || !isSkip(err) {
+		t.Fatalf("启动签到默认不推，应返回 skip: %v", err)
+	}
+	logs := httpx.Logs(0)
+	var found bool
+	for _, e := range logs {
+		if e.Scope == "notify" && strings.Contains(e.Msg, "跳过推送") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("跳过推送应留日志，实际日志: %+v", logs)
 	}
 }

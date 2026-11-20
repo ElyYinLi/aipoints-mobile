@@ -344,7 +344,19 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	target := r.URL.Query().Get("account")
+	// 每轮签到都留一条痕迹。
+	//
+	// 用户报「我没点刷新，它自己又跑了一轮」——有这条日志就能直接对上是
+	// 「冷启动自动签到」还是「手动触发」，不用靠猜。target 为空即整轮一键签到。
+	target0 := r.URL.Query().Get("account")
+	httpx.AddLog(httpx.LogEntry{
+		Level: "info", Scope: "checkin",
+		Msg: map[bool]string{
+			true:  "开始单账号签到：" + target0,
+			false: "开始一键签到（整轮）",
+		}[target0 != ""],
+	})
+	target := target0
 	out := make([]provider.Result, 0, len(list))
 	for _, a := range list {
 		if !a.Enabled {
