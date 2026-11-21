@@ -11,19 +11,20 @@ package panel
 // 返回可直接插入 innerHTML 的 <svg> 片段。
 func iconSVG(name string) string {
 	body := map[string]string{
-		// 汇总：V4 双星（0.7.0 起与 App 图标同源）。
+		// 汇总：V4 双星（0.7.0 起与 App 图标同源，0.7.1 同步减细）。
 		//
 		// 这里以前是两枚 **实心** 五角星（1.9/0.8 单位），和 App 图标的
 		// **空心描边**双星是完全独立的两套图形——改 App 图标时左上角这个
 		// logo 永远不会跟着变，用户看到的就是「进了 App 图标还是旧的」。
 		//
-		// 现在按 App 图标的 1024 画布坐标等比映射到 24 网格（除以 42.67），
-		// 描边宽度同步缩放：主星 48/42.67≈1.13，副星 28/42.67≈0.66。
-		// 图形形状、两个星的相对位置与 App 图标完全一致。
+		// 坐标按 App 图标的 1024 画布等比映射到 24 网格（除以 42.67）。
+		// 线宽不按 42.67 严格缩：那样副星只有 0.40 单位，在 22px 的显示尺寸下
+		// 约 0.37px，会直接消失。改为保留**相对比例**（副星 = 主星 × 17/30 ≈ 0.57），
+		// 主星取 1.10 保证可见，副星 0.62 —— 粗细关系和 App 图标一致。
 		"spark": `<path d="M10.66,4.57 L12.05,8.34 L15.82,9.73 L12.05,11.11 L10.66,14.88 L9.27,11.11 L5.5,9.73 L9.27,8.34 Z"
-		            stroke-width="1.13"/>
+		            stroke-width="1.10"/>
 		          <path d="M16.64,14.60 L17.34,16.52 L19.26,17.22 L17.34,17.93 L16.64,19.85 L15.93,17.93 L14.01,17.22 L15.93,16.52 Z"
-		            stroke-width="0.66"/>`,
+		            stroke-width="0.62"/>`,
 		"refresh":  `<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>`,
 		"check":    `<path d="M4.5 12.5l5 5 10-11"/>`,
 		"checkAll": `<path d="M1.5 12.5l4.5 4.5 8-9"/><path d="M8.5 16l1.5 1.5 11-12"/>`,
@@ -106,8 +107,8 @@ const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"
   <!-- 0.6.9 V4：主界面左上角同款 spark 双星，白色空心描边，错位呼应 -->
   <!-- 主星：居中偏上 -->
   <path d="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z"
-        fill="none" stroke="#fff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- 副星：右下角，放大到 112 半径、描边减细到 28，空心清晰 -->
+        fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 副星：右下角，放大到 112 半径、描边减细到 17（0.7.1），空心清晰 -->
   <path d="M710,623 L740.1,704.9 L822,735 L740.1,765.1 L710,847 L679.9,765.1 L598,735 L679.9,704.9 Z"
-        fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+        fill="none" stroke="#fff" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`

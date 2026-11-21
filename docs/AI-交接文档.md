@@ -2,7 +2,7 @@
 
 > 给下一个接手这个项目的 AI（或人）看的。目标：读完这一份就能独立继续开发，不用重新逆向、不用再踩已踩过的坑。
 >
-> 最后更新：2026-11-21 · 对应版本 **0.7.0 (versionCode 25)**
+> 最后更新：2026-11-21 · 对应版本 **0.7.1 (versionCode 26)**
 
 ---
 
@@ -614,9 +614,15 @@ WebKit [PR #66838](https://github.com/WebKit/WebKit/pull/66838) 的日志原文�
 （而非 kill）的情形——`webViewWebContentProcessDidTerminate` **不会触发**，
 页面就此僵死。我们之前完全没实现这个回调，等于没有任何兜底。
 
-**修法**（三处，缺一不可）：
-- `didBecomeActive` 里的 JS 调用改成 `asyncAfter(.now() + 0.35)`，避开拒绝窗口。
-  `refreshOnResume` 只读不写，晚 350ms 无副作用，用户也察觉不到。
+**0.7.0 的修法是错的**（保留在此作为反面记录）：当时以为只要延后 350ms 就能避开
+`setAllowsActivities(false)` 的窗口。用户实测锁屏 4 分钟回来，界面**完全没反应**——
+说明那不是「活动被拒绝」，而是进程冻结后压根没恢复。
+
+**0.7.1 的真正修法**：
+- 回前台**先探活**：离开 ≥1.5s 就发 `1+1`，700ms 内没回来即判定冻结。
+  冻结时 `completionHandler` 永远不执行，这是唯一可靠的判据。
+- 两级重建：先 `load()`；1.2s 未完成则改 `.id()` 销毁重建 WKWebView
+  （进程池整体卡死时唯一能自救的手段）。
 - 实现 `webViewWebContentProcessDidTerminate`，自动重载 `PanelSchemeHandler.baseURL`。
   **带 60s 冷却**：进程反复崩溃时无限 reload 会一直闪白，比不恢复还糟。
   重载后会走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**。
@@ -1030,3 +1036,4 @@ python3 tools/check_secrets.py
 | **0.6.8** | ① **App 图标改为左上角同款 spark 双星**（渐变底 + 白星，四文件同源，加 `icons_test.go`）；② 账号页令牌说明删「只有支持令牌的平台才有这个按钮」；③ 数据页导出按钮合成一行 生成/复制/导出 |
 | **0.6.9** | ① **iOS 后台「读取失败」根治（方案 A2）**：主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch` 进程内分发，零 TCP socket；前端 `j()` 给 POST 加 `X-Points-Body` 兜底头；本机 server 只留 OAuth 302 / `pointsctl`。② **图标 V4 错位呼应**：小星描边减细到 28 保空心清晰，四文件同源。③ 版本升 0.6.9 / code 24 |
 | **0.7.0** | ① **iOS 长时间后台回前台整体卡顿根治**：`didBecomeActive` 调 JS 延后 350ms 避开 WebKit `setAllowsActivities(false)` 拒绝窗口；补 `webViewWebContentProcessDidTerminate` 自动重载（60s 冷却，重载走 `bootCheck` 判定不重复签到）；`.appbar`/`.bar` 毛玻璃 `blur(18px)→blur(10px)` 加 `@supports` 降级、删 `.card` 的 `will-change`。② **图标产物规范化**：去掉 `rx` 预烘焙圆角、转 RGB 无 alpha、`tools/gen_icon.py` 产出完整 13 尺寸 appiconset（18 条 Contents.json），`build-ipa.sh` 不再 `sips` 现缩；**左上角 logo 改为与 App 图标同源的空心双星**（原来实心，所以不跟随更新）。③ 新增 `perf_test.go` 5 项回归锁。④ 版本升 0.7.0 / code 25 |
+| **0.7.1** | ① **推翻 0.7.0 的卡顿判断**：350ms 延后无效，用户实测锁屏 4 分钟回来「点哪都没反应」。真因是 WebContent 进程被**冻结**后不恢复（WebKit Bug 321511：suspended and idle、`webContentProcessDidTerminate` 不触发），客户端无法唤醒，只能重建。改为「探活 + 两级重建」：离开 ≥1.5s 发 `1+1` 探针，700ms 无响应即判定冻结 → 先 `load()`，1.2s 未完成 → 改 `.id()` 销毁重建整个 WKWebView；重建期间盖同色遮罩。② **补 `WKURLSchemeTask` 失效保护**（`liveTasks` 集合）：重建必然 cancel in-flight 请求，Go 侧跑完仍会回调，旧代码注释写了「忽略」但没检查，会抛异常崩溃。③ **图标描边 48/28 → 30/17**（白色占比 8.03%→5.23%，对齐参考实现 3.96%），logo 同步 1.10/0.62。④ 版本升 0.7.1 / code 26 |

@@ -34,13 +34,33 @@ struct PointsApp: App {
 struct ContentView: View {
     @EnvironmentObject var engine: Engine
     @ObservedObject private var login = LoginCoordinator.shared
+    @ObservedObject private var style = StatusBarStyle.shared
     @State private var webView: WKWebView?
-    /// 进入后台的时刻。0.6.4 起只作诊断，不再参与「回来要不要重建」的判断。
+    /// 进入后台的时刻。0.7.1 起重新参与判断：离开太久就不指望进程还活着。
     @State private var awayAt: Date?
+    /// 0.7.1：正在重建页面时盖一层遮罩，避免看到白闪，也顺手挡住误触。
+    @State private var recovering = false
+    /// 0.7.1：二级恢复。改这个值会让 SwiftUI 销毁旧 WKWebView 并新建一个。
+    ///
+    /// 为什么需要：如果 WebContent 进程池整体卡死，连 `load()` 都发不出去
+    /// （页面永远等不到 didFinish），只有新建 WKWebView 才能强制拉一个新进程。
+    /// 这是最后一道兜底，触发概率很低，但它是唯一能自救的手段。
+    @State private var recoverToken = UUID()
 
     var body: some View {
         ZStack {
-            PanelWebView(url: engine.panelURL, onReady: { webView = $0 })
+            PanelWebView(url: engine.panelURL,
+                         onReady: { webView = $0 },
+                         onLoadFinish: {
+                             // 首屏或重建加载完成：收起遮罩。
+                             if recovering { withAnimation(.easeOut(duration: 0.18)) { recovering = false } }
+                         },
+                         onRecoverStart: {
+                             // 进程被终止、准备重载：先盖上，别让用户看白屏。
+                             recovering = true
+                         })
+                // 0.7.1 二级恢复：token 变了就整体换一个新的 WKWebView。
+                .id(recoverToken)
                 // 全屏铺满：底部让内容延伸到 Home Indicator，顶部也交给页面自己
                 // 用 env(safe-area-inset-top) 留白——这样状态栏区域就是页面背景色，
                 // 不会出现「系统默认背景 + 内容区」两截色。
@@ -53,48 +73,59 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // 重建遮罩：盖住整个屏幕，用页面同款底色，看起来像「刷新了一下」而不是白屏。
+            if recovering {
+                ZStack {
+                    (style.dark
+                        ? Color(red: 0x14/255.0, green: 0x12/255.0, blue: 0x18/255.0)
+                        : Color(red: 0xFB/255.0, green: 0xF8/255.0, blue: 0xFF/255.0))
+                    ProgressView().controlSize(.regular)
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
         }
         .onAppear { engine.start() }
-        // 0.6.4：回到前台只刷新一次列表，别的一律不做。
+        // 回前台的处理（0.7.1 重做）。
         //
-        // 这里原本有三段（用户要求「这6个触发全部删掉」「你现有的措施全部删掉」）：
-        //   1. 首次 didBecomeActive 注入 __pointsAutoCheckin()  → 删
-        //   2. 后台 >45s 就 reloadFromBlank() 整页重建          → 删
-        //   3. 注入探活 + DOM 探测（.card,.row 为空即判定页面已死）→ 删
+        // 演进史，别再走回头路：
+        //   0.6.4  把这里的六段触发全删了（用户要求），包括「探活 + 重建」。
+        //          当时删是因为它是冲着「读取失败」去的，方向错了。
+        //   0.7.0  加了 350ms 延后调 JS，想避开 WebKit 的 setAllowsActivities(false)。
+        //          实测无效——用户锁屏 4 分钟回来「点哪都没反应」。
+        //   0.7.1  认清真相：那不是「活动被拒绝」，而是 WebContent 进程被冻结后
+        //          **根本没恢复**。此时页面收不到任何事件，evaluateJavaScript
+        //          不回回调，webViewWebContentProcessDidTerminate 也不触发
+        //          （WebKit Bug 321511 的现场：进程 suspended and idle、
+        //          主线程停在 mach_msg 正常空闲、Time Since Fork 23 小时、
+        //          进程既没被 kill 也没有 reload）。客户端无法唤醒这种进程，
+        //          唯一出路是重建。
         //
-        // 第 1 段会让「一天开几次 App 就签几轮」，是黑号的直接来源；
-        // 第 2、3 段是冲着「读取失败」去的，但真因在引擎侧复用了系统已回收的
-        // keep-alive 连接（已改成短连接），重建页面只是把界面刷白。
-        // 现在读不到就如实显示「读取失败 + 重试」，不重建、不猜。
+        // 所以现在的做法是「先探活，死了就重建」：
+        //   离开 < 1.5s  → 快速切一下，进程肯定活着，直接刷新（不探活，省一次往返）
+        //   离开 >= 1.5s → 发一个 1+1 探针，700ms 内没回来就判定冻结 → 重建
+        //
+        // 为什么探针能判定：进程冻结时 runJavaScriptInFrameInScriptWorld 不会
+        // 有结果，completionHandler 永远不执行；而活着的进程几十毫秒就回调。
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didEnterBackgroundNotification)) { _ in
             awayAt = Date()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didBecomeActiveNotification)) { _ in
+            let away = awayAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
             awayAt = nil
-            // 0.7.0（A1）：回前台不再立刻 evaluateJavaScript，先让出 350ms。
-            //
-            // 为什么必须延后：iOS 的 ProcessStateMonitor 在 App 即将挂起时会调
-            // processWillBeSuspendedImmediately() → setProcessesShouldSuspend(true)
-            // → ProcessThrottler::setAllowsActivities(false)。在这个状态下页面
-            // **不接受任何前台活动**，WebKit 官方日志里就是反复出现的
-            //   "not allowed to add foreground activity
-            //    WebPageProxy::runJavaScriptInFrameInScriptWorld"
-            // ——而这正是 evaluateJavaScript 的底层调用。
-            // 解除挂起依赖 RunningBoard 的**异步**回调，回前台瞬间还没生效，
-            // 所以原来那条一 didBecomeActive 就发的 JS 会被直接拒掉，
-            // 后面的刷新和交互全部排队，表现出来就是「点一下要反应半天」。
-            //
-            // 350ms 是给 RunningBoard 状态更新留的窗口：一次 App 切换的
-            // 状态上报通常在几十到两百毫秒内完成，350ms 有足够余量，
-            // 又短到用户察觉不出延迟。refreshOnResume 本身只读不写，多等一会儿没有副作用。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard let web = webView, web.url != nil else { return }
+            // 正在重建就别再插一脚：重建还没走完又发探针，只会叠出第二轮 rebuild。
+            if recovering { return }
+            guard let web = webView, web.url != nil else { return }
+
+            if away < 1.5 {
                 web.evaluateJavaScript(
                     "window.__pointsRefresh && window.__pointsRefresh()",
                     completionHandler: nil)
+                return
             }
+            reviveOrRebuild(web)
         }
         .fullScreenCover(item: Binding(
             get: { login.pendingProvider.map(LoginTarget.init) },
@@ -116,6 +147,68 @@ struct ContentView: View {
                 // 登录完成后重载页面，让新账号立刻出现在列表里
                 webView?.reload()
             }
+        }
+    }
+
+    // MARK: - 0.7.1 回前台恢复
+
+    /// 探活：活着就刷新，死了就重建。
+    ///
+    /// 为什么不能只靠 `webViewWebContentProcessDidTerminate`：那个回调只在
+    /// WebContent 进程被**终止**时触发。而我们遇到的是被**冻结**（suspended）——
+    /// 进程还在、内存还在、`Time Since Fork` 甚至能到 20 多小时，但不再处理任何
+    /// 事件（WebKit Bug 321511）。这种情况下回调不会来，只能自己探。
+    ///
+    /// 探针选 `1+1`：返回值是确定的数字，能区分「真的执行了」和「返回 undefined」。
+    /// 700ms 是取舍——活进程几十毫秒就回来，死进程永远不回来；
+    /// 等太久用户白等，太短可能误判（首次唤醒慢）。
+    private func reviveOrRebuild(_ web: WKWebView) {
+        var settled = false
+
+        // 用闭包捕获的方式做「只结算一次」：探针回调和超时定时器谁先到算谁。
+        func settle(alive: Bool) {
+            guard !settled else { return }
+            settled = true
+            if alive {
+                web.evaluateJavaScript(
+                    "window.__pointsRefresh && window.__pointsRefresh()",
+                    completionHandler: nil)
+            } else {
+                rebuild(web)
+            }
+        }
+
+        web.evaluateJavaScript("1+1") { result, error in
+            // 有错、或拿不到数值，都按「进程不响应」处理。
+            let ok = (error == nil) && ((result as? NSNumber) != nil)
+            settle(alive: ok)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { settle(alive: false) }
+    }
+
+    /// 重建页面。用已知的面板入口而不是 `reload()`：进程冻结后 `web.url` 可能
+    /// 已经不可靠（可能为空、可能是 about:blank），显式指定才稳。
+    ///
+    /// 重建后的行为是安全的：
+    ///   - 走的是 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不重复签到**；
+    ///   - 账号数据在 Go 侧落盘 + Keychain，与 WebView 无关，不会丢；
+    ///   - 页面状态（滚动位置、展开的面板）会重置，但这是换取「能用」的必要代价。
+    private func rebuild(_ web: WKWebView) {
+        recovering = true
+        web.stopLoading()
+        web.load(URLRequest(url: PanelSchemeHandler.baseURL))
+
+        // 一级兜底：1.2s 还没 didFinish，说明连 load 都发不出去（进程池卡死），
+        // 升级为销毁重建整个 WKWebView。本地 HTML 正常几十毫秒就加载完，
+        // 1.2s 已经非常宽松。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard recovering else { return }
+            recoverToken = UUID()
+        }
+        // 二级兜底：万一新建 WKWebView 也起不来（引擎挂了等），4s 后收掉遮罩，
+        // 不能让用户一直看着转圈。此时页面会显示它自己的「读取失败 + 重试」。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            if recovering { withAnimation(.easeOut(duration: 0.2)) { recovering = false } }
         }
     }
 }
@@ -191,8 +284,17 @@ struct PanelWebView: UIViewRepresentable {
     let url: URL?
     /// 把创建好的 webView 回传给 ContentView，供自动签到与新标签页使用
     var onReady: ((WKWebView) -> Void)? = nil
+    /// 0.7.1：页面加载完成（首屏 or 重建后）。用来收起重建遮罩。
+    var onLoadFinish: (() -> Void)? = nil
+    /// 0.7.1：即将因进程终止而重载，用来盖上遮罩（否则会看到一段白屏）。
+    var onRecoverStart: (() -> Void)? = nil
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        let c = Coordinator()
+        c.onLoadFinish = onLoadFinish
+        c.onRecoverStart = onRecoverStart
+        return c
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
@@ -219,6 +321,9 @@ struct PanelWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
+        // SwiftUI 会反复调 updateUIView，闭包也要跟着换（捕获的 @State 会变）。
+        context.coordinator.onLoadFinish = onLoadFinish
+        context.coordinator.onRecoverStart = onRecoverStart
         guard let url, web.url == nil else { return }
         web.load(URLRequest(url: url))
         context.coordinator.web = web
@@ -226,6 +331,10 @@ struct PanelWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var web: WKWebView?
+        /// 0.7.1：页面加载完成回调（收起重建遮罩用）。
+        var onLoadFinish: (() -> Void)?
+        /// 0.7.1：即将重载（盖上遮罩用）。
+        var onRecoverStart: (() -> Void)?
         /// 0.6.9：面板 scheme 拦截层。持有它，保证生命周期与 WebView 一致。
         let schemeHandler = PanelSchemeHandler()
         /// 0.7.0（A3）：上次因内容进程终止而重建页面的时刻，用于冷却。
@@ -240,7 +349,9 @@ struct PanelWebView: UIViewRepresentable {
         ///   - 这就是用户说的「整体卡顿，点一下要反应半天」里最严重的那一种。
         ///
         /// 注意 WebKit Bug 321511 里记录的另一种情况（进程被**挂起**而非 kill）
-        /// 不会触发本回调，那种由 A1 的延后调用兜住。
+        /// 不会触发本回调。0.7.0 以为那种能靠「延后 350ms 调 JS」兜住，
+        /// 实测无效；0.7.1 改成回前台主动探活，探不到就重建（见 ContentView.reviveOrRebuild）。
+        /// 这两条路互补：被 kill 走这里，被冻结走探活。
         ///
         /// 冷却 60s：避免进程反复崩溃时无限 reload（每次 reload 都会重跑
         /// bootCheck，连着 reload 会造成整页反复闪白，比不恢复还糟）。
@@ -250,10 +361,16 @@ struct PanelWebView: UIViewRepresentable {
                 return
             }
             lastRecoverAt = now
+            onRecoverStart?()
             // 面板是单页应用，没有路由，重新加载面板地址即可回到原状态。
             // 不 reload() 是因为进程被杀后 webView.url 可能已经不可靠，
             // 直接用已知的面板入口更稳。
             webView.load(URLRequest(url: PanelSchemeHandler.baseURL))
+        }
+
+        /// 0.7.1：页面加载完成 → 通知 SwiftUI 收起重建遮罩。
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onLoadFinish?()
         }
 
         /// 处理面板发来的消息。

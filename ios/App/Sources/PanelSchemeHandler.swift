@@ -25,11 +25,31 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
     /// 回调用来把「本地 server 是否可用」等信息透给诊断（可选）。
     var onDispatch: ((String) -> Void)?
 
+    /// 0.7.1：活跃 task 集合。
+    ///
+    /// 这是必须的，不是防御性编程。WKURLSchemeTask 有硬规则：一旦 WebKit 调用了
+    /// `webView(_:stop:)`，之后再对它调 `didReceive` / `didFinish` 会抛
+    /// NSInternalInconsistencyException **直接崩溃**。
+    ///
+    /// 而 0.7.1 新增了「回前台检测到进程冻结就重建页面」——重建必然 cancel 掉
+    /// 上一轮所有 in-flight 请求（包括那条卡住的 /api/query）。Go 侧的
+    /// MobilePanelDispatch 无法取消，它跑完后照样会回到主线程回调；
+    /// 这时若不做检查，就是稳定可复现的崩溃。
+    ///
+    /// 旧代码在这里写了注释「task 已停止——忽略，避免崩溃」，但并没有真的检查。
+    private var liveTasks = Set<ObjectIdentifier>()
+
+    private func key(_ task: WKURLSchemeTask) -> ObjectIdentifier {
+        ObjectIdentifier(task as AnyObject)
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         let req = urlSchemeTask.request
         let url = req.url ?? URL(string: "\(Self.scheme)://\(Self.host)/")!
         let path = url.path.isEmpty ? "/" : url.path
         let method = req.httpMethod ?? "GET"
+        let taskKey = key(urlSchemeTask)
+        liveTasks.insert(taskKey)
 
         // 时区偏移：Go 在 gomobile 里读不到系统时区，日志需要页面上报。
         // 自定义 scheme 的 request header 由 fetch 带过来（前端 j() 已统一加 X-TZ-Offset）。
@@ -70,7 +90,9 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
 
             // WKURLSchemeTask 的回调必须在主线程。
             DispatchQueue.main.async {
-                // App 可能在这期间进了后台/被销毁，task 已停止——忽略，避免崩溃。
+                // 关键：task 可能已被 stop（页面重建、导航离开、进后台被取消）。
+                // 已失效就什么都别调，否则崩溃。
+                guard self.liveTasks.remove(taskKey) != nil else { return }
                 urlSchemeTask.didReceive(response)
                 urlSchemeTask.didReceive(data)
                 urlSchemeTask.didFinish()
@@ -80,7 +102,8 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
-        // Go 侧调用无法取消；回调里 task 若已 stop，WKWebView 会忽略后续 didReceive。
-        // 这里不做额外处理，避免与 in-flight 的 DispatchQueue.main 回调竞争。
+        // Go 侧调用无法取消，但必须标记失效：Go 跑完后回主线程时靠这个集合判断
+        // 该不该回调。旧实现这里是空函数，等于放弃了唯一的保护点。
+        liveTasks.remove(key(urlSchemeTask))
     }
 }

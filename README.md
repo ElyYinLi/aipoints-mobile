@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.7.0-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.7.1-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -146,6 +146,53 @@ suspended 后监听 socket 停止 accept、资源可能被系统回收，回到�
 图标同时更新为 **V4 错位呼应**（主界面左上角同款白色空心 spark 双星，小星描边减细保证空心清晰），
 App 图标 / 面板 SVG / Android 矢量图四处同源。
 
+### 锁屏 / 后台回来「点哪都没反应」的根治（0.7.1）
+
+0.7.0 判断错了方向。当时以为是 WebKit 拒绝「前台活动」，于是把调用延后 350ms。
+**实测无效**：锁屏 4 分钟回来，整个界面完全没反应。
+
+真正的原因是 WebContent 进程被**冻结**（不是被 kill）之后根本没有恢复：
+
+- 页面收不到任何事件 → 点哪都没反应；
+- `evaluateJavaScript` 的 completionHandler 永远不执行；
+- `webViewWebContentProcessDidTerminate` **也不会触发**（进程没死）。
+
+[WebKit Bug 321511](https://bugs.webkit.org/show_bug.cgi?id=321511) 的现场记录：进程
+`suspended and idle`、CPU 0.004s、主线程停在 `mach_msg` 正常空闲、
+`Time Since Fork` 23 小时、既没被 kill 也没 reload。客户端**无法唤醒**这种进程。
+
+所以 0.7.1 改成「先探活，死了就重建」：
+
+| 离开时长 | 动作 |
+|---|---|
+| < 1.5s | 快速切一下，进程肯定活着，直接刷新 |
+| ≥ 1.5s | 发 `1+1` 探针，**700ms** 内没回来 → 判定冻结 |
+
+判定冻结后两级重建：
+
+1. **先 `load()` 面板入口**（本地 HTML，正常几十毫秒）；1.2s 还没加载完说明连 load 都发不出去；
+2. **销毁重建整个 WKWebView**（改 `.id()` 强制 SwiftUI 换实例）——这是进程池整体卡死时
+   唯一能自救的手段。
+
+重建期间盖一层同色遮罩，看起来是「刷新了一下」而不是白屏。
+
+另外补了一个**必须有的崩溃防护**：`WKURLSchemeTask` 一旦被 `stop`，再调
+`didReceive` / `didFinish` 会抛异常直接崩溃。而重建必然 cancel 上一轮所有
+in-flight 请求，Go 侧跑完照样会回调——旧代码注释写了「忽略已停止的 task」，
+但**没有真的检查**。现在用活跃集合守住。
+
+重建后走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**；
+账号在 Go 侧落盘 + Keychain，与 WebView 无关，不会丢。
+
+### 图标描边减细（0.7.1）
+
+0.7.0 保留 48/28 描边，只做了规范修正。这一版按实测结论减细到 **30/17**：
+
+- 同尺寸（137px）逐像素比对 `aipy-checkin`：白色像素占比 **8.03% → 5.23%**（参考实现 3.96%）
+- 48 太粗，主星四角之间的凹口被填平，星形退化成一团十字
+- 副星按同比例（17/30）减细，保持空心
+- 左上角 logo 同步：主 1.10 / 副 0.62（保留相对比例，不按 42.67 严格缩——那样副星会细到消失）
+
 ### 长时间后台回来不再整体卡顿（0.7.0）
 
 0.6.9 解决了「读取失败」，但留下另一个问题：**后台待久了回前台，整个界面卡顿，点一下要反应半天**。
@@ -160,10 +207,9 @@ App 图标 / 面板 SVG / Android 矢量图四处同源。
 另据 [Bug 321511](https://bugs.webkit.org/show_bug.cgi?id=321511)，进程被**挂起**（而非 kill）时
 `webViewWebContentProcessDidTerminate` 不会触发，页面会一直僵着。
 
-0.7.0 三层修复：
+0.7.0 当时做了三层，其中**第一条是错的**（0.7.1 已推翻，见上一节）：
 
-- **回前台延后 350ms 再调 JS**：给 RunningBoard 的状态更新留出窗口，
-  短到用户察觉不出延迟，`refreshOnResume` 本身只读不写，晚一点没有副作用。
+- ~~回前台延后 350ms 再调 JS~~ —— 以为能避开 RunningBoard 的窗口，实测无效，0.7.1 删除。
 - **补上 `webViewWebContentProcessDidTerminate`**：进程真被系统回收时自动重新加载面板，
   不再出现「点什么都不响应」。带 **60s 冷却**，避免崩溃循环里反复闪白。
   重载后走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**。
@@ -173,7 +219,7 @@ App 图标 / 面板 SVG / Android 矢量图四处同源。
 
 ### 图标产物规范化（0.7.0）
 
-图标图形本身没改（V4 描边宽度保持不变），但生产流程换成标准做法：
+这一版只动生产流程，**图形和描边都没改**（描边在 0.7.1 才减细）：
 
 - **满幅方形、不预烘焙圆角**：iOS 自己按 ≈22.37% 裁圆角；预烘焙后圆角外侧的透明像素
   在部分渲染路径（第三方商店 / 重签安装）会被填成纯黑，边缘发脏。
@@ -182,8 +228,7 @@ App 图标 / 面板 SVG / Android 矢量图四处同源。
   `sips` 现缩，主屏 / 设置页 / App Store 三种尺寸各糊一遍。
 - 由 `tools/gen_icon.py` 统一产出，`--check` 可校验合规性；`ios/build-ipa.sh` 不再现场缩放。
 - **左上角 logo 与 App 图标同源**：以前是两枚**实心**星，和 App 图标的空心描边双星是完全独立的
-  两套图形，改 App 图标时 logo 永远不跟着变；现在按 1024 画布坐标等比映射到 24 网格，
-  描边宽度同步缩放（主星 1.13 / 副星 0.66）。
+  两套图形，改 App 图标时 logo 永远不跟着变；现在按 1024 画布坐标等比映射到 24 网格。
 
 ### 目录
 

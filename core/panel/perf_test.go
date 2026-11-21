@@ -25,27 +25,37 @@ func swiftSource(t *testing.T) string {
 	return string(b)
 }
 
-// A1：回前台调 JS 必须延后。
+// A1：回前台必须先探活，死了要重建。
 //
-// 原因见 PointsApp.swift 内注释：iOS 挂起 WebContent 后 setAllowsActivities(false)，
-// 此时 runJavaScriptInFrameInScriptWorld（evaluateJavaScript 的底层）会被拒。
-// 解除挂起依赖 RunningBoard 的异步回调，一 didBecomeActive 就发必然撞上。
-func TestResumeRefreshIsDeferred(t *testing.T) {
+// 演进：0.7.0 只是「延后 350ms 调 JS」，想避开 setAllowsActivities(false) 的拒绝窗口。
+// 实测无效——用户锁屏 4 分钟回来「点哪都没反应」。真因是 WebContent 进程被冻结后
+// 根本没恢复（WebKit Bug 321511），页面收不到任何事件，客户端无法唤醒，只能重建。
+func TestResumeProbeAndRebuild(t *testing.T) {
 	src := swiftSource(t)
-	if !strings.Contains(src, "asyncAfter(deadline: .now() + 0.35)") {
-		t.Fatal("回前台调 JS 未延后：必须 asyncAfter 0.35s 避开 WebKit 拒绝窗口")
+
+	// 必须有探活函数
+	if !strings.Contains(src, "func reviveOrRebuild") {
+		t.Fatal("缺少 reviveOrRebuild：回前台必须探活，不能盲发刷新")
 	}
-	// 不能再出现「didBecomeActive 里直接 evaluateJavaScript」的写法
-	idx := strings.Index(src, "didBecomeActiveNotification")
-	if idx < 0 {
-		t.Fatal("找不到 didBecomeActiveNotification 处理块")
+	// 探针用 1+1：返回值确定，能区分「真的执行了」和「返回 undefined」
+	if !strings.Contains(src, `evaluateJavaScript("1+1")`) {
+		t.Fatal("探针不是 1+1，无法判断进程是否真的响应")
 	}
-	tail := src[idx:]
-	if end := strings.Index(tail, ".fullScreenCover"); end > 0 {
-		tail = tail[:end]
+	// 必须有超时兜底（进程冻结时 completionHandler 永远不来）
+	if !strings.Contains(src, ".now() + 0.7") {
+		t.Fatal("缺少 0.7s 探活超时：冻结时回调不会来")
 	}
-	if strings.Contains(tail, "evaluateJavaScript") && !strings.Contains(tail, "asyncAfter") {
-		t.Fatal("didBecomeActive 处理块里仍直接 evaluateJavaScript")
+	// 必须有重建
+	if !strings.Contains(src, "func rebuild(") {
+		t.Fatal("缺少 rebuild：进程冻结只能重建，无法唤醒")
+	}
+	// 二级恢复：连 load 都发不出去时销毁重建 WKWebView
+	if !strings.Contains(src, "recoverToken") || !strings.Contains(src, ".id(recoverToken)") {
+		t.Fatal("缺少 recoverToken 二级恢复：进程池卡死时只有新建 WKWebView 能救")
+	}
+	// 快速切换不要误伤
+	if !strings.Contains(src, "away < 1.5") {
+		t.Fatal("缺少「离开 < 1.5s 直接刷新」的快路径")
 	}
 }
 

@@ -26,10 +26,10 @@
 
     <!-- 主星：居中偏上 -->
     <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="48" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:strokeWidth="30" android:strokeLineCap="round" android:strokeLineJoin="round"
         android:pathData="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z" />
-    <!-- 副星：右下角，放大到 112 半径、描边减细到 28，空心清晰 -->
+    <!-- 副星：右下角，放大到 112 半径、描边减细到 17（0.7.1），空心清晰 -->
     <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="28" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:strokeWidth="17" android:strokeLineCap="round" android:strokeLineJoin="round"
         android:pathData="M710,623 L740.1,704.9 L822,735 L740.1,765.1 L710,847 L679.9,765.1 L598,735 L679.9,704.9 Z" />
 </vector>

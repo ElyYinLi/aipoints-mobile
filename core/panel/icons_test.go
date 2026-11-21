@@ -22,9 +22,14 @@ func TestAppIconUsesSparkDoubleStar(t *testing.T) {
 			t.Fatalf("appIcon 缺少 spark 双星要素：%q", want)
 		}
 	}
-	// 小星描边必须减细到 28（0.6.8 的 46 把空心挤成一点、桌上看着糊）。绝不能再加粗。
-	if !strings.Contains(appIcon, `stroke-width="28"`) {
-		t.Fatal("小星描边未减细到 28，空心会again被挤成一点")
+	// 0.7.1：主星 48→30、副星 28→17。
+	// 依据是同尺寸逐像素比对 aipy-checkin：白色占比 8.03% → 5.23%（参考实现 3.96%）。
+	// 48 太粗，主星四角之间的凹口被填平，星形退化成一团。
+	if !strings.Contains(appIcon, `stroke-width="30"`) {
+		t.Fatal("主星描边不是 30，星形凹口会被填平")
+	}
+	if !strings.Contains(appIcon, `stroke-width="17"`) {
+		t.Fatal("副星描边不是 17（应与主星同比例 17/30）")
 	}
 	for _, dead := range []string{"#22D48A", "积分卡", "签到勾", "url(#s)"} {
 		if strings.Contains(appIcon, dead) {
@@ -52,12 +57,10 @@ func TestAppIconMeetsAppleSpec(t *testing.T) {
 	if !strings.Contains(appIcon, `<rect width="1024" height="1024" fill="url(#g)"/>`) {
 		t.Fatal("appIcon 底色不是满幅方形，四角会露出透明")
 	}
-	// 3. 描边宽度保持不变（用户红线：不允许改细）
-	if !strings.Contains(appIcon, `stroke-width="48"`) {
-		t.Fatal("主星描边宽度被改动，用户明确要求保持 48")
-	}
-	if !strings.Contains(appIcon, `stroke-width="28"`) {
-		t.Fatal("副星描边宽度被改动，用户明确要求保持 28")
+	// 3. 描边必须是 0.7.1 定下的 30 / 17（见 TestAppIconUsesSparkDoubleStar 的说明）
+	if !strings.Contains(appIcon, `stroke-width="30"`) ||
+		!strings.Contains(appIcon, `stroke-width="17"`) {
+		t.Fatal("描边宽度不是 30/17")
 	}
 }
 
@@ -74,8 +77,9 @@ func TestBrandLogoMatchesAppIcon(t *testing.T) {
 	if got := strings.Count(logo, "<path"); got != 2 {
 		t.Fatalf("左上角 logo 应为双星（2 条 path），实际 %d 条", got)
 	}
-	// 线宽取自 App 图标的等比映射：48/42.67≈1.13、28/42.67≈0.66
-	for _, w := range []string{`stroke-width="1.13"`, `stroke-width="0.66"`} {
+	// 线宽保留 App 图标的**相对比例**（副星 = 主星 × 17/30 ≈ 0.57）。
+	// 不按 42.67 严格缩：那样副星只有 0.40 单位，22px 显示时约 0.37px，会消失。
+	for _, w := range []string{`stroke-width="1.10"`, `stroke-width="0.62"`} {
 		if !strings.Contains(logo, w) {
 			t.Fatalf("左上角 logo 线宽 %q 与 App 图标比例不一致", w)
 		}
