@@ -64,3 +64,39 @@ func swiftSourceNamed(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+// 0.7.2：并发闸门 + 请求超时兜底。
+//
+// 为什么需要闸门：Go 的导出函数是同步阻塞的，一个请求占一条 GCD 线程。
+// App 在后台待久了，页面可能积压若干 in-flight 请求；回前台一股脑发出去，
+// global 队列（上限约 64 条线程）会被占满，后续所有接口一起排队——
+// 用户看到的就是「点哪都没反应」。限死 8 条，多的老实排队。
+//
+// 为什么需要超时：Go 侧网络请求都有 context 超时，正常情况下一定返回。
+// 但万一卡在某个没设超时的地方，页面就会永远停在 loading，同样表现为
+// 「点了没反应」。这里兜一层，让页面拿到 504 去走它自己的重试 UI。
+func TestSchemeHasGateAndTimeout(t *testing.T) {
+	src := swiftSourceNamed(t, "PanelSchemeHandler.swift")
+
+	if !strings.Contains(src, "DispatchSemaphore(value: 8)") {
+		t.Fatal("缺少并发闸门：无限制并发会把 GCD 线程占满，所有接口一起排队")
+	}
+	if !strings.Contains(src, "gate.wait()") || !strings.Contains(src, "gate.signal()") {
+		t.Fatal("信号量没有成对使用，会永久泄漏槽位")
+	}
+	// 超时必须按接口区分：签到本身就要跑很久，20s 会把它误杀
+	if !strings.Contains(src, "isLong") {
+		t.Fatal("缺少长任务判断，签到会被超时兜底误杀")
+	}
+	if !strings.Contains(src, "180.0") || !strings.Contains(src, "20.0") {
+		t.Fatal("超时阈值不是 180s（长任务）/ 20s（普通接口）")
+	}
+	// 只结算一次：正常返回与超时兜底互斥
+	if !strings.Contains(src, "OnceFlag") || !strings.Contains(src, "once.fire()") {
+		t.Fatal("缺少一次性闸门：正常返回和超时兜底会重复 didFinish")
+	}
+	// 504 要带可读文案，页面能直接显示
+	if !strings.Contains(src, "504") || !strings.Contains(src, "请求超时") {
+		t.Fatal("超时兜底没有返回 504 + 可读文案")
+	}
+}

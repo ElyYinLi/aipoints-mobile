@@ -2,7 +2,7 @@
 
 > 给下一个接手这个项目的 AI（或人）看的。目标：读完这一份就能独立继续开发，不用重新逆向、不用再踩已踩过的坑。
 >
-> 最后更新：2026-11-21 · 对应版本 **0.7.1 (versionCode 26)**
+> 最后更新：2026-11-21 · 对应版本 **0.7.2 (versionCode 27)**
 
 ---
 
@@ -14,16 +14,20 @@
 
 **为什么这么设计**：界面只写一份两端通用；业务逻辑只写一份 Go；凭据不出本机；平台接口改版时只需改一个 provider 文件。
 
-**当前行为（0.6.9，改动前务必确认没有破坏）**：
+**当前行为（0.7.2，改动前务必确认没有破坏）**：
 
 - **打开 App 走「今日判定」**：引擎落盘 `daily_memo.json`，今天跑过就只刷新 + 列出哪几个没签，不再发签到请求；没跑过才走完整一键签到（签到 → 领任务奖励 → 抽奖，与点底部按钮同一条 `checkinAll` 路径）。**一键签到按钮每次都真跑一轮，不受「今天跑过」限制**——这条是用户红线，别动。
-- **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）。后台读不到数据的兜底（整页重建 / 探活 / 自动重试）在 0.6.4 已全部删除。
+- **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）。
+  但「回前台换 WebView 实例」是例外，而且是必须的：0.6.4 曾把整页重建/探活全删掉，
+  0.7.0~0.7.2 证明那是错的——WebView 长时间挂起后真的会僵死。现在的策略见 3.37：
+  离开 <1.5s 只刷新 / 1.5~10s 探活（不打断签到）/ **≥10s 直接换新 WKWebView**。
+  **换实例不等于重跑签到**：新页面走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新。
 - **iOS「读取失败」根治（0.6.9 方案 A2）**：真因不是前端、也不是 keep-alive（那改的是引擎→外部平台链路），而是 Apple TN2277 所述——App suspended 后本机 listening socket 停止 accept、资源可被回收，回前台旧 listener 不再恢复。0.6.9 让 iOS 主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch`，进程内复用同一套 handler，不经任何 socket。本机 server 只留给 WorkBuddy OAuth 302 与桌面 `pointsctl`。改这条链路前务必读 `ios/App/Sources/PanelSchemeHandler.swift` 头注释与本文第 3 节。
 - 签到进度全程显示在顶部活动条（`#act`），逐账号 `正在签到…（2/3）`
 - **没有「···」入口**（0.6.4 全删）：任务 / 抽奖直接摆卡片与紧凑行；令牌 / 停用 / 删除放在 设置 → 账号 的行内按钮；长按账号名改备注
 - **通知（0.6.7 起「启用即推」）**：「什么时候推」四个触发开关 + 「重发上次」全删，只要通知启用，每轮签到都推一条 Webhook（五渠道），失败项置顶；`on_start/on_manual/always` 存量值在 save/send 时强制归一化成 true，不参与判断
 
-**界面结构**：主界面顶栏 = logo(spark 双星，0.6.9 起为 V4 错位呼应：大星居中 + 小星右下、描边减细保空心) + 标题 + 刷新/主题/设置；设置弹层四个页签 通知/账号/数据/日志（无标题栏、无关闭按钮，点遮罩关闭）；版本号只在「签到逻辑」页底部；数据页导出行 = 生成/复制/导出 三按钮一行。
+**界面结构**：主界面顶栏 = logo(spark 双星，0.6.9 起为 V4 错位呼应：大星居中 + 小星右下；0.7.1 起描边 30/17，与 App 图标同源) + 标题 + 刷新/主题/设置；设置弹层四个页签 通知/账号/数据/日志（无标题栏、无关闭按钮，点遮罩关闭）；版本号只在「签到逻辑」页底部；数据页导出行 = 生成/复制/导出 三按钮一行。
 
 **0.6.0 新增的规则（都在 `core/panel/` 里，改之前先读对应文件头注释）**：
 
@@ -75,7 +79,7 @@
 │   └── cmd/pointsctl/         命令行工具：serve（起面板）/ query / checkin
 ├── ios/                       Swift 壳。⚠️ 不是 Xcode 工程，是 build-ios.sh 手写编的
 │   └── App/Sources/
-│       ├── PointsApp.swift    WKWebView 装配 + scheme handler + 导航策略（★ 0.7.0：回前台延后调 JS、进程终止兜底）
+│       ├── PointsApp.swift    WKWebView 装配 + scheme handler + 导航策略（★ 0.7.2：离开≥10s 直接换实例，不再探活）
 │       ├── PanelSchemeHandler.swift  ★ 0.6.9 A2：pointsapi:// 拦截 → MobilePanelDispatch
 │       ├── Engine.swift       引擎门面（panelURL 指向 scheme baseURL）+ Keychain
 │       └── LoginCoordinator.swift / LoginView.swift  OAuth/points:// 登录容器
@@ -589,7 +593,7 @@ fmtMoney(n)  // 余额：<1 时保留两位
 > 读代码时别再以为它们还会影响推送。`send()` / `save()` 里会把 `OnStart/OnManual/Always/OnSuccess/OnFailure`
 > 一律归一化成 true，读旧配置也拦不住推送。改通知逻辑前先读 `notify.go` 的 `send()` 头注释。
 
-### 3.37 iOS 长时间后台回前台「整体卡顿」（0.7.0 根治）
+### 3.37 iOS 长时间后台回前台「整体卡顿」（0.7.2 定论）
 
 **症状**：切后台放着，几小时后回前台，整个界面发木——点一下要等半天才响应。
 
@@ -630,9 +634,51 @@ WebKit [PR #66838](https://github.com/WebKit/WebKit/pull/66838) 的日志原文�
   并加 `@supports` 降级（一个 sticky 一个 fixed，长期停在屏幕上，每帧都要重算模糊）；
   删掉 `.card` 的 `will-change:transform`（每张卡一个独立合成层，账号多了反而拖慢合成）。
 
-> ⚠️ **别再动这几处**。`core/panel/perf_test.go` 有 5 项回归锁会直接失败。
+> ⚠️ **别再动这几处**。`core/panel/perf_test.go` 有回归锁会直接失败。
 > 另外 `inactiveSchedulingPolicy` 在这条路上**用不上**：它是 iOS 17+ 可用的 API，
 > 但只管「web view 不在任何 window 里」的情形，我们的 WebView 始终在窗口内。
+
+#### 0.7.2：0.7.1 的「探活 + 两级重建」也失败了
+
+用户实测 0.7.1：**锁屏 4 分钟回来，卡顿恢复不了，一直卡。**
+
+复盘出两个致命点，都值得记住：
+
+1. **探活的判据不可靠。** `evaluateJavaScript("1+1")` 能回话，只证明 JS 引擎还在跑，
+   **不证明输入事件能被处理**。WebView 卡死时最常见的是「脚本活着、触摸全吞」——
+   这时探针返回 2，代码判定「健康」，于是只刷新不重建，**把自己锁死在卡死状态**。
+   用「能不能执行 JS」去推断「能不能响应点击」，这个假设本身是错的。
+2. **恢复链路太长。** 0.7.1 是「先 `load()` → 1.2s 没加载完 → 再换 `.id()`」，
+   一次恢复跨两个 runloop、三个 `asyncAfter`。任何一个没排上（主线程一忙就排不上），
+   链路就断在半路，而 `recovering` 还停在 `true`，后续所有回前台事件都被
+   `if recovering { return }` 挡掉 —— 于是「一直卡，恢复不了」。
+
+**0.7.2 的做法：放弃判断。**
+
+| 离开时长 | 动作 |
+|---|---|
+| < 1.5s | 只调 `window.__pointsRefresh()` |
+| 1.5s ~ 10s | 探一次活，800ms 不回就 `hardReset()`（这一档是为了不打断正在跑的签到） |
+| **≥ 10s** | **直接 `hardReset()`**，不问进程死活 |
+
+`hardReset()` 在**一个 runloop 内**完成：断开旧实例 `navigationDelegate`（防止它的延迟回调
+污染新状态）→ `webView = nil`（立刻放掉强引用）→ 换 `webGen`（SwiftUI 建全新实例）。
+**不做 `load()`**：旧实例已经不处理消息，load 也是白发。
+
+3 秒没 `didFinish` → 显示原生重试页（`stalled` 状态，「页面没有响应 / 重新加载」），
+用户不用杀进程重开。
+
+顺带压掉两处长期开销：
+- `isInspectable` 收进 `#if DEBUG`（release 下它让 WebKit 常驻保留调试元信息）；
+- `isOpaque = true`（原来是 clear，透明会让 WebView 每帧与父视图重新合成）；
+- `StatusBarStyle.dark` 去掉 `@Published` 改手动同值短路——页面每次 `render()` 都可能
+  postMessage 一次 `setTheme`，原来会让根视图和 `preferredColorScheme` 反复重算。
+
+**还有一个必须同时看的**：`PanelSchemeHandler` 加了并发闸门（`DispatchSemaphore(value: 8)`）
+和请求级超时（普通 20s / 签到类 180s，超时回 504）。原因：Go 导出函数同步阻塞，
+一个请求占一条 GCD 线程；后台积压的请求回前台一股脑发出去会把 global 队列占满，
+后续接口全排队 —— 表现同样是「点哪都没反应」。超时兜底则防止「Go 卡在没设超时的地方」
+让页面永远转圈。两者都用 `OnceFlag` 保证只结算一次。
 
 ### 3.38 图标「不清晰」和左上角 logo「不更新」（0.7.0）
 
@@ -664,6 +710,52 @@ WebKit [PR #66838](https://github.com/WebKit/WebKit/pull/66838) 的日志原文�
   0.6.9 的 `app-icon-512.png` 有 47831 个全透明像素。
 
 现在统一由 `tools/gen_icon.py` 产出，`python3 tools/gen_icon.py --check` 可校验合规。
+
+#### 0.7.2：以上全部不是「糊」的原因，真因是 Info.plist 声明错了
+
+用户 0.7.1 实测：「图标还是那样模糊」。
+
+把 IPA 拆开看 `Info.plist`：
+
+```
+CFBundleIconFiles = ["AppIcon60", "AppIcon120", "AppIcon180"]
+.app 根目录        = AppIcon60.png(60) AppIcon120.png(120) AppIcon180.png(180)
+CFBundleIconName   = 不存在
+```
+
+**iOS 解析 `CFBundleIconFiles` 的规则是「基础名 + @2x/@3x」。** 对 `AppIcon60`
+它只会找 `AppIcon60.png` / `AppIcon60@2x.png` / `AppIcon60@3x.png`：
+
+| 系统要找 | 我们有的 | 结果 |
+|---|---|---|
+| `AppIcon60.png`（1x=60） | ✅ 有 | 用得上 |
+| `AppIcon60@2x.png`（2x=120） | ❌ 没有（有 `AppIcon120.png`，但那是**另一个基础名**） | 找不到 |
+| `AppIcon60@3x.png`（3x=180） | ❌ 没有（同理） | 找不到 |
+
+所有现代 iPhone 是 @3x 屏，要 180px 的主屏图标，系统只找到 60px 那张 →
+**放大 3 倍**铺上去。源图画得再锐利，主屏上也一定是糊的。
+
+而 `CFBundleIconName` 从来没写过，所以 `actool` 编译好的 `Assets.car`
+（13 尺寸、RGB 无 alpha、满幅不预圆角）**一次都没被用过**。
+
+这解释了为什么 0.7.0、0.7.1 连续两版改图都「没变化」——iOS 根本没在看新图。
+
+**修法（`build-ipa.sh` 第 4 段已重写）：**
+
+1. `CFBundleIconName = AppIcon` → 系统读 `Assets.car`（首选路径）；
+   只有 `Assets.car` 真的存在才写，否则会变成空白图标；
+2. 平铺文件按 `AppIcon60@2x.png` / `AppIcon60@3x.png` / `AppIcon76.png` /
+   `AppIcon76@2x.png` / `AppIcon83.5@2x.png` 正确命名，兜住「自签重签工具破坏
+   `Assets.car`」的情况；
+3. `CFBundleIconFiles` 只列**基础名**（`AppIcon60` / `AppIcon76` / `AppIcon1024`），
+   让系统自己拼后缀。
+
+回归锁在 `core/panel/icon_plist_test.go`：`TestIconDeclaredFromAssetCatalog`、
+`TestIconFlatFilesUseScaleSuffix`、`TestIconFilesListUsesBaseNamesOnly`。
+
+> **教训（第二次踩同一类坑）**：判断「图糊」之前，先确认**系统实际在用哪张图**。
+> 拆 IPA 读 `Info.plist` + 列 `.app` 根目录文件名，两步就能定位，比对着源图反复量
+> 像素有效得多。前两轮全部在「图本身」这一层打转，压根没验证「图有没有被用上」。
 
 ---
 
@@ -1010,6 +1102,12 @@ python3 tools/check_secrets.py
   指的是渠道种类，不是同时推 5 个地方
 - **令牌管理只有 AiPy**：`TokenManager` 接口是通用的，但其余平台控制台没有对应接口
 - **`always` 开关默认关闭**：打开后每次冷启动都会推一条，一天开 5 次 App 就 5 条
+- **卡顿的最终手段仍是「换实例」**：`hardReset()` 能解决 WebContent 进程僵死、触摸被吞、
+  图层缓存损坏等绝大多数情况，代价是页面状态（滚动位置、展开的面板）重置。
+  如果 0.7.2 在真机上仍卡，下一步要看的是「重建有没有真的发生」——`stalled` 重试页
+  是否出现过、点「重新加载」能否恢复，这两个现象能区分「重建没跑」和「重建也救不回」
+- **`Assets.car` 与平铺图标两条路并存**：自签重签工具（SideStore / Sideloadly）有时会
+  破坏 `Assets.car`，所以平铺 PNG 必须一直保持正确的 `@2x/@3x` 命名，别图省事删掉
 
 ---
 
@@ -1037,3 +1135,4 @@ python3 tools/check_secrets.py
 | **0.6.9** | ① **iOS 后台「读取失败」根治（方案 A2）**：主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch` 进程内分发，零 TCP socket；前端 `j()` 给 POST 加 `X-Points-Body` 兜底头；本机 server 只留 OAuth 302 / `pointsctl`。② **图标 V4 错位呼应**：小星描边减细到 28 保空心清晰，四文件同源。③ 版本升 0.6.9 / code 24 |
 | **0.7.0** | ① **iOS 长时间后台回前台整体卡顿根治**：`didBecomeActive` 调 JS 延后 350ms 避开 WebKit `setAllowsActivities(false)` 拒绝窗口；补 `webViewWebContentProcessDidTerminate` 自动重载（60s 冷却，重载走 `bootCheck` 判定不重复签到）；`.appbar`/`.bar` 毛玻璃 `blur(18px)→blur(10px)` 加 `@supports` 降级、删 `.card` 的 `will-change`。② **图标产物规范化**：去掉 `rx` 预烘焙圆角、转 RGB 无 alpha、`tools/gen_icon.py` 产出完整 13 尺寸 appiconset（18 条 Contents.json），`build-ipa.sh` 不再 `sips` 现缩；**左上角 logo 改为与 App 图标同源的空心双星**（原来实心，所以不跟随更新）。③ 新增 `perf_test.go` 5 项回归锁。④ 版本升 0.7.0 / code 25 |
 | **0.7.1** | ① **推翻 0.7.0 的卡顿判断**：350ms 延后无效，用户实测锁屏 4 分钟回来「点哪都没反应」。真因是 WebContent 进程被**冻结**后不恢复（WebKit Bug 321511：suspended and idle、`webContentProcessDidTerminate` 不触发），客户端无法唤醒，只能重建。改为「探活 + 两级重建」：离开 ≥1.5s 发 `1+1` 探针，700ms 无响应即判定冻结 → 先 `load()`，1.2s 未完成 → 改 `.id()` 销毁重建整个 WKWebView；重建期间盖同色遮罩。② **补 `WKURLSchemeTask` 失效保护**（`liveTasks` 集合）：重建必然 cancel in-flight 请求，Go 侧跑完仍会回调，旧代码注释写了「忽略」但没检查，会抛异常崩溃。③ **图标描边 48/28 → 30/17**（白色占比 8.03%→5.23%，对齐参考实现 3.96%），logo 同步 1.10/0.62。④ 版本升 0.7.1 / code 26 |
+| **0.7.2** | ① **卡顿：0.7.1 的探活方案也失败，改为「不判断，直接换实例」**。探活判据错在「能执行 JS ≠ 能响应触摸」——卡死时常见脚本活着、触摸全吞，探针返回 2 就判定健康，反而把自己锁死；恢复链路跨两个 runloop 三个 `asyncAfter`，任一环没排上就断，`recovering` 还停在 true 把后续事件全挡掉。现改为三档：<1.5s 只刷新 / 1.5~10s 探活（不打断签到）/ **≥10s 直接 `hardReset()`**；`hardReset` 一个 runloop 内断回调 → 置 nil → 换 `webGen`；3s 未 `didFinish` 显示**原生重试页**。② **`PanelSchemeHandler` 加并发闸门（8）+ 请求超时（普通 20s / 签到 180s，超时 504）**，`OnceFlag` 保证只结算一次——后台积压请求回前台会把 GCD 线程占满，表现同样是「点哪都没反应」。③ **图标模糊真因**：`CFBundleIconFiles=["AppIcon60","AppIcon120","AppIcon180"]` 而 iOS 只认「基础名+@2x/@3x」，@3x 屏要 180px 却只找到 `AppIcon60.png`(60px) 放大 3 倍；且从未写 `CFBundleIconName`，`Assets.car` 一次没用过。修为 `CFBundleIconName=AppIcon` + 平铺按 `AppIcon60@2x/@3x` 正确命名 + `CFBundleIconFiles` 只列基础名。④ release 关 `isInspectable`、`isOpaque=true`、`StatusBarStyle.dark` 同值短路。⑤ 新增 `icon_plist_test.go` 4 项回归锁。⑥ 版本升 0.7.2 / code 27 |

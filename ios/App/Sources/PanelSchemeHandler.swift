@@ -25,19 +25,24 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
     /// 回调用来把「本地 server 是否可用」等信息透给诊断（可选）。
     var onDispatch: ((String) -> Void)?
 
-    /// 0.7.1：活跃 task 集合。
+    /// 活跃 task 集合。
     ///
     /// 这是必须的，不是防御性编程。WKURLSchemeTask 有硬规则：一旦 WebKit 调用了
     /// `webView(_:stop:)`，之后再对它调 `didReceive` / `didFinish` 会抛
     /// NSInternalInconsistencyException **直接崩溃**。
     ///
-    /// 而 0.7.1 新增了「回前台检测到进程冻结就重建页面」——重建必然 cancel 掉
-    /// 上一轮所有 in-flight 请求（包括那条卡住的 /api/query）。Go 侧的
-    /// MobilePanelDispatch 无法取消，它跑完后照样会回到主线程回调；
-    /// 这时若不做检查，就是稳定可复现的崩溃。
+    /// 而回前台换实例必然 cancel 掉上一轮所有 in-flight 请求（包括那条卡住的
+    /// /api/query）。Go 侧的 MobilePanelDispatch 无法取消，它跑完后照样会回到
+    /// 主线程回调；这时若不做检查，就是稳定可复现的崩溃。
     ///
-    /// 旧代码在这里写了注释「task 已停止——忽略，避免崩溃」，但并没有真的检查。
+    /// 只在主线程读写（start / stop / deliver 都由 WebKit 或 main.async 驱动）。
     private var liveTasks = Set<ObjectIdentifier>()
+
+    /// 并发闸门。Go 的导出函数是同步阻塞的，一个请求占一条 GCD 线程。
+    /// 后台期间页面可能积压了若干请求，回来时若一股脑全发出去，会把
+    /// global 队列的线程占满（上限约 64），后续所有接口一起排队——
+    /// 表现就是「点哪都没反应」。这里限死 8 条，多的老实排队。
+    private let gate = DispatchSemaphore(value: 8)
 
     private func key(_ task: WKURLSchemeTask) -> ObjectIdentifier {
         ObjectIdentifier(task as AnyObject)
@@ -69,25 +74,19 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
         var target = path
         if let q = url.query, !q.isEmpty { target += "?" + q }
 
-        // gomobile 导出函数是同步的，但签到等接口可能耗时数秒——必须放到后台队列，
-        // 否则会卡住 WKWebView 的调用线程（表现为「点一下界面卡住」）。
-        DispatchQueue.global(qos: .userInitiated).async {
-            let reply = MobilePanelDispatch(method, target, body, tz) ?? ""
-            var status = 200
-            var respBody = reply
-            if let data = reply.data(using: .utf8),
-               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                if let s = obj["status"] as? Int { status = s }
-                if let b = obj["body"] as? String { respBody = b }
-            }
+        // 主文档是 HTML；其余 /api 都是 JSON。按 path 决定 Content-Type。
+        let mime = (path == "/" || path == "/index.html") ? "text/html" : "application/json"
 
-            // 主文档是 HTML；其余 /api 都是 JSON。按 path 决定 Content-Type。
-            let mime = (path == "/" || path == "/index.html") ? "text/html" : "application/json"
-            let headers = ["Content-Type": mime, "Cache-Control": "no-store"]
+        // 只允许结算一次：正常返回、超时兜底、谁先到算谁。
+        let once = OnceFlag()
+
+        func deliver(status: Int, payload: String) {
+            guard once.fire() else { return }
             let response = HTTPURLResponse(url: url, statusCode: status,
-                                           httpVersion: nil, headerFields: headers)!
-            let data = respBody.data(using: .utf8) ?? Data()
-
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": mime,
+                                                          "Cache-Control": "no-store"])!
+            let data = payload.data(using: .utf8) ?? Data()
             // WKURLSchemeTask 的回调必须在主线程。
             DispatchQueue.main.async {
                 // 关键：task 可能已被 stop（页面重建、导航离开、进后台被取消）。
@@ -99,11 +98,60 @@ final class PanelSchemeHandler: NSObject, WKURLSchemeHandler {
                 self.onDispatch?("\(method) \(target) -> \(status)")
             }
         }
+
+        // gomobile 导出函数是同步的，签到等接口可能耗时数十秒——必须放到后台队列，
+        // 否则会卡住 WKWebView 的调用线程（表现为「点一下界面卡住」）。
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.gate.wait()
+            let reply = MobilePanelDispatch(method, target, body, tz) ?? ""
+            self.gate.signal()
+
+            var status = 200
+            var respBody = reply
+            if let data = reply.data(using: .utf8),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                if let s = obj["status"] as? Int { status = s }
+                if let b = obj["body"] as? String { respBody = b }
+            }
+            deliver(status: status, payload: respBody)
+        }
+
+        // 超时兜底：Go 侧的网络请求都有 context 超时，正常情况下一定会在
+        // 时限内返回。这里再兜一层，是为了防止「Go 卡在一个没设超时的地方」
+        // 时页面永远停在 loading——那看起来同样像「点哪都没反应」。
+        // 签到类接口本身就要跑很久，给足 180s；其余 20s。
+        let isLong = path.hasPrefix("/api/checkin")
+            || path.hasPrefix("/api/tasks/claim")
+            || path.hasPrefix("/api/lottery")
+        let limit = isLong ? 180.0 : 20.0
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + limit) {
+            deliver(status: 504, payload: "{\"ok\":false,\"error\":\"请求超时，请重试\"}")
+        }
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {
         // Go 侧调用无法取消，但必须标记失效：Go 跑完后回主线程时靠这个集合判断
-        // 该不该回调。旧实现这里是空函数，等于放弃了唯一的保护点。
+        // 该不该回调。写成空函数就等于放弃了唯一的保护点。
         liveTasks.remove(key(urlSchemeTask))
+    }
+}
+
+/// 只放行一次的闸门。用来让「正常返回」和「超时兜底」互斥。
+///
+/// 不能用 `DispatchQueue.main.async` 里再判断——两个分支都排到主线程时，
+/// 先到的已经把 task 从 liveTasks 里摘掉了，后到的自然退出，结果是对的；
+/// 但 `deliver` 里的 `once` 还额外挡住了「同一个 task 被重复 didFinish」这种
+/// 更早发生的错误，代价只有一把 NSLock。
+final class OnceFlag {
+    private let lock = NSLock()
+    private var fired = false
+
+    /// 返回 true 表示本次调用抢到了执行权。
+    func fire() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if fired { return false }
+        fired = true
+        return true
     }
 }

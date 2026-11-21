@@ -77,11 +77,20 @@ cp "$ROOT/ios/App/Info.plist" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Info.plist" 2>/dev/null || true
 
 echo "== 4/6 生成图标 =="
-# 0.7.0：图标不再用 sips 现场缩放。
-# 旧流程只有一个 1024 槽位 + 4 张平铺 PNG，各尺寸靠 sips 临时缩，
-# 结果 App Store / 主屏 / 设置页三种尺寸各自糊一遍。
-# 现在由 tools/gen_icon.py 一次性产出完整 13 尺寸 appiconset（RGB 无 alpha、
-# 满幅方形不预烘焙圆角），actool 直接编译进 Assets.car。
+# 0.7.2：这一整块重做，因为 0.7.0/0.7.1 的写法让 iOS 拿到的是**错误尺寸**的图标。
+#
+# 病灶：旧脚本把 CFBundleIconFiles 写成 ["AppIcon60","AppIcon120","AppIcon180"]，
+# 并在 .app 根目录放 AppIcon60.png(60) / AppIcon120.png(120) / AppIcon180.png(180)。
+# 但 iOS 解析 CFBundleIconFiles 的规则是「基础名 + @2x/@3x」，即对 AppIcon60 只会找
+#   AppIcon60.png(1x=60) / AppIcon60@2x.png(120) / AppIcon60@3x.png(180)
+# 而 AppIcon120、AppIcon180 是**另外两个基础名**，系统匹配 AppIcon60 时根本不会看它们。
+# 于是 @3x 屏（所有现代 iPhone）要 180px 图标，系统只找到 60px 的 AppIcon60.png，
+# 放大 3 倍 → 无论源图多锐利，主屏上都是糊的。这才是「图标一直不清晰」的真因，
+# 之前几轮所有描边/超采样的调整都是在错误的层面上打转。
+#
+# 现在两条路都铺对：
+#   1. CFBundleIconName=AppIcon → 系统读 Assets.car（13 尺寸全套，actool 编译）；
+#   2. 平铺文件按 name@2x/@3x 正确命名 → 自签重签工具破坏 Assets.car 时的兜底。
 ICONSET="$ROOT/assets/AppIcon.appiconset"
 if [ -f "$ICONSET/icon-1024.png" ]; then
   ASSETS="$OUT/Assets.xcassets"
@@ -93,28 +102,40 @@ if [ -f "$ICONSET/icon-1024.png" ]; then
     --minimum-deployment-target "$MIN_IOS" --app-icon AppIcon \
     --output-partial-info-plist "$OUT/assetcatalog.plist" >/dev/null 2>&1 \
     || echo "  (actool 未产出 Assets.car，回退平铺图标)"
-  # 平铺图标兜底：只生成 Assets.car 时，iOS 15 的部分安装方式（尤其自签重签）
-  # 拿不到图标，会显示白底占位。这里同时铺一组 AppIcon<尺寸>.png 并在
-  # Info.plist 里登记 CFBundleIconFiles，两条路都留着。
-  # 注意：直接复用 appiconset 里的成品，不再 sips 现缩。
-  for s in 60 120 180 1024; do
-    cp "$ICONSET/icon-${s}.png" "$APP/AppIcon${s}.png" 2>/dev/null \
-      || cp "$ICONSET/icon-1024.png" "$APP/AppIcon${s}.png"
-  done
+
+  # 平铺：iPhone 60pt（1x/2x/3x）+ iPad 76pt / 83.5pt + 市场图
+  cp "$ICONSET/icon-60.png"   "$APP/AppIcon60.png"
+  cp "$ICONSET/icon-120.png"  "$APP/AppIcon60@2x.png"
+  cp "$ICONSET/icon-180.png"  "$APP/AppIcon60@3x.png"
+  cp "$ICONSET/icon-76.png"   "$APP/AppIcon76.png"
+  cp "$ICONSET/icon-152.png"  "$APP/AppIcon76@2x.png"
+  cp "$ICONSET/icon-167.png"  "$APP/AppIcon83.5@2x.png"
+  cp "$ICONSET/icon-1024.png" "$APP/AppIcon1024.png"
+
   PB=/usr/libexec/PlistBuddy
+  # 首选：告诉系统「图标在 Assets.car 里叫 AppIcon」。
+  # 只有 actool 真的产出了 Assets.car 才写，否则会变成没有图标的空白 App。
+  if [ -f "$APP/Assets.car" ]; then
+    $PB -c "Delete :CFBundleIconName" "$APP/Info.plist" >/dev/null 2>&1 || true
+    $PB -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist"
+  fi
+  # 兜底：只列**基础名**，让系统自己拼 @2x / @3x。
   $PB -c "Delete :CFBundleIconFiles" "$APP/Info.plist" >/dev/null 2>&1 || true
   $PB -c "Add :CFBundleIconFiles array" "$APP/Info.plist" >/dev/null 2>&1 || true
-  for f in AppIcon60.png AppIcon120.png AppIcon180.png; do
-    $PB -c "Add :CFBundleIconFiles: string ${f%.png}" "$APP/Info.plist" >/dev/null 2>&1 || true
+  for f in AppIcon60 AppIcon76 AppIcon1024; do
+    $PB -c "Add :CFBundleIconFiles: string $f" "$APP/Info.plist" >/dev/null 2>&1 || true
   done
-  # iPad 兼容（UIDeviceFamily 含 2），缺了会在 iPad 上白图标
+  # iPad（UIDeviceFamily 含 2）走 CFBundleIcons，缺了会在 iPad 上白图标
   $PB -c "Delete :CFBundleIcons" "$APP/Info.plist" >/dev/null 2>&1 || true
   $PB -c "Add :CFBundleIcons dict" "$APP/Info.plist" >/dev/null 2>&1 || true
   $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon dict" "$APP/Info.plist" >/dev/null 2>&1 || true
   $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array" "$APP/Info.plist" >/dev/null 2>&1 || true
-  for f in AppIcon60 AppIcon120 AppIcon180; do
+  for f in AppIcon60 AppIcon76 AppIcon1024; do
     $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles: string $f" "$APP/Info.plist" >/dev/null 2>&1 || true
   done
+  if [ -f "$APP/Assets.car" ]; then
+    $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName string AppIcon" "$APP/Info.plist" >/dev/null 2>&1 || true
+  fi
 else
   echo "  跳过：缺少 assets/AppIcon.appiconset/icon-1024.png（先跑 python3 tools/gen_icon.py）"
 fi

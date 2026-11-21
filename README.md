@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.7.1-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.7.2-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -49,7 +49,8 @@ iOS 从 0.6.9 起改用 `pointsapi://` 自定义 scheme 在进程内直连引擎
 | 📊 **状态可见** | 顶部活动条逐个账号显示进度（`百度搭子 正在签到…（2/3）`），完成后变绿、失败变红，几秒自动收起 |
 | 🔒 **本地优先** | 凭据进 iOS Keychain / Android Keystore，不经任何第三方服务器；引擎不出本机（Android 回环 / iOS 进程内 scheme） |
 | 🛡️ **iOS 后台不失联** | 面板走 `pointsapi://` 进程内分发，零 TCP socket，切后台再久回来也不会「读取失败」 |
-| 🚀 **回前台不卡顿** | 避开 WebKit 挂起恢复窗口，补进程终止兜底；毛玻璃与合成层开销都压到最低（0.7.0） |
+| 🖼️ **图标按规范出图** | 13 尺寸 appiconset 走 `Assets.car`，平铺兜底按 `name@2x/@3x` 命名——之前主屏拿的是 60px 放大图，这才是糊的真因（0.7.2） |
+| 🚀 **回前台不失灵** | 离开超过 10 秒就换一个全新 WKWebView，不问进程死活——卡住时系统根本不回话，判断本身就不该做（0.7.2） |
 | 🎨 **双端同构** | UI 由 Go 侧单文件 HTML 提供，改界面只改一份，iOS 与 Android 完全一致 |
 | 📱 **三种视图** | 完整卡片 / 紧凑列表一键切换；长按任意账号可拖动排序 |
 | 🌗 **双态主题** | 浅色 / 深色，状态栏图标明暗同步（「跟随系统」在 WebView 里不可靠，已移除） |
@@ -146,7 +147,82 @@ suspended 后监听 socket 停止 accept、资源可能被系统回收，回到�
 图标同时更新为 **V4 错位呼应**（主界面左上角同款白色空心 spark 双星，小星描边减细保证空心清晰），
 App 图标 / 面板 SVG / Android 矢量图四处同源。
 
-### 锁屏 / 后台回来「点哪都没反应」的根治（0.7.1）
+### 回前台不再「点哪都没反应」——不再判断，直接换实例（0.7.2）
+
+0.7.1 的「先探活、再重建」**也失败了**。用户实测：锁屏 4 分钟回来「卡顿恢复不了，一直卡」。
+
+复盘出两个致命点：
+
+1. **探活的判据不可靠**。`evaluateJavaScript("1+1")` 能回话，只说明 JS 引擎还在跑，
+   **不等于输入事件能被处理**。WebView 卡住时常见的是「脚本活着、触摸全吞」，
+   这时探针返回 2，代码判定「健康」，于是只刷新、不重建 —— 正好把自己锁死在卡死状态。
+2. **恢复链路太长**。0.7.1 是「先 `load()` → 1.2s 没加载完 → 再换 `.id()`」，
+   一次恢复跨两个 runloop、三个 `asyncAfter`。任何一环没排上（主线程一忙就排不上），
+   整条链就断在半路，而 `recovering` 还停在 true，后续所有回前台事件都被
+   `if recovering { return }` 挡掉 —— 于是「一直卡，恢复不了」。
+
+0.7.2 的做法是**放弃判断**：
+
+| 离开时长 | 动作 | 理由 |
+|---|---|---|
+| < 1.5s | 只调一次 `__pointsRefresh()` | 页面肯定活着，重建反而是抖动 |
+| 1.5s ~ 10s | 探一次活，800ms 不回就重建 | 签到可能正在跑，不能粗暴打断 |
+| **≥ 10s** | **直接换新 WKWebView** | 签到早该结束；这一档就是「卡死」的现场，不问了 |
+
+`hardReset()` 在**一个 runloop 内**完成三件事：断开旧实例的 `navigationDelegate`
+（防止它的延迟回调污染新状态）→ `webView = nil`（立刻放掉强引用）→ 换 `webGen`
+（SwiftUI 建全新实例）。不做 `load()`：旧实例已经不处理消息，load 也是白发。
+
+3 秒还没 `didFinish` 就认为这次也失败，显示**原生重试页**（「页面没有响应 / 重新加载」），
+至少用户不用杀进程重开。账号与签到记录都在 Go 侧落盘 + Keychain，重试不影响数据。
+
+顺带压掉两处长期开销：
+
+- `isInspectable` 只在 `#if DEBUG` 开。release 下开着会让 WebKit 常驻保留调试元信息；
+- `isOpaque = true`（原来是 clear）。透明会让 WebView 每帧与父视图重新合成，
+  叠上 appbar 的 `backdrop-filter` 就是「滑一下要喘口气」。
+
+还有一个隐蔽的：`StatusBarStyle.dark` 原来是 `@Published`，**赋相同值也会发
+`objectWillChange`**。页面每次 `render()` 都可能 postMessage 一次 `setTheme`，
+等于让根视图和 `preferredColorScheme` 反复重算。现在同值直接短路。
+
+### 图标一直糊，是因为 iOS 拿到的是 60px 放大图（0.7.2）
+
+前两版都在改图（圆角、alpha、描边粗细），**方向从头到尾就错了**。真正的问题在
+`Info.plist` 的声明：
+
+```
+CFBundleIconFiles = ["AppIcon60", "AppIcon120", "AppIcon180"]
+```
+
+iOS 解析这个数组的规则是「**基础名 + @2x/@3x**」。对 `AppIcon60` 它只会找：
+
+```
+AppIcon60.png     (1x,  60px)  ✅ 存在
+AppIcon60@2x.png  (2x, 120px)  ❌ 不存在
+AppIcon60@3x.png  (3x, 180px)  ❌ 不存在
+```
+
+而 `AppIcon120`、`AppIcon180` 是**另外两个基础名**，系统匹配 `AppIcon60` 时
+根本不会看它们。于是所有 @3x 屏要 180px 图标，系统只找到 60px 那张，
+**放大 3 倍**铺上去 —— 源图画得再锐利，主屏上都是糊的。
+
+同时 `CFBundleIconName` 从来没写过，所以编译好的 `Assets.car`（13 尺寸全套）
+根本没被用上。
+
+修法两条路都铺对：
+
+1. `CFBundleIconName = AppIcon` → 系统读 `Assets.car`，那里是 13 尺寸、RGB 无 alpha、
+   满幅不预圆角的全套图（`tools/gen_icon.py` 2048 超采样后 LANCZOS 缩）；
+2. 平铺文件按 `AppIcon60@2x.png` / `AppIcon60@3x.png` / `AppIcon76@2x.png` /
+   `AppIcon83.5@2x.png` 正确命名，兜住「自签重签工具破坏 Assets.car」的情况；
+3. `CFBundleIconFiles` 只列**基础名**（`AppIcon60` / `AppIcon76` / `AppIcon1024`），
+   让系统自己拼后缀。
+
+### ~~锁屏 / 后台回来「点哪都没反应」的根治（0.7.1）~~（实测无效，0.7.2 已替换）
+
+> **保留此节只作反面记录。** 「探活 + 两级重建」在真机上仍然卡死，
+> 原因见上一节。现在的实现是 0.7.2 的「直接换实例」。
 
 0.7.0 判断错了方向。当时以为是 WebKit 拒绝「前台活动」，于是把调用延后 350ms。
 **实测无效**：锁屏 4 分钟回来，整个界面完全没反应。
@@ -184,7 +260,11 @@ in-flight 请求，Go 侧跑完照样会回调——旧代码注释写了「忽�
 重建后走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**；
 账号在 Go 侧落盘 + Keychain，与 WebView 无关，不会丢。
 
-### 图标描边减细（0.7.1）
+### ~~图标描边减细（0.7.1）~~（不是糊的原因，0.7.2 已找到真因）
+
+> **保留此节只作记录。** 描边从 48/28 减到 30/17 本身不算错（白色占比 8.03% → 5.23%，
+> 更接近参考实现的 3.96%），但它**不是**「图标不清晰」的原因——iOS 当时根本没在
+> 使用这张图，见上一节。
 
 0.7.0 保留 48/28 描边，只做了规范修正。这一版按实测结论减细到 **30/17**：
 
