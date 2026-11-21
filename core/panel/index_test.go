@@ -90,9 +90,9 @@ func TestIndexNoReloadFallback(t *testing.T) {
 	for _, dead := range []string{
 		"function reloadThrottled()",
 		"RELOAD_KEY",
-		"reloadFromBlank",       // 页面不得自己重建
-		"notifyReload",          // 页面不得通知壳层重建
-		"BOOT_FRESH_MS",         // 「刚启动就失败 = 页面残废」的判定已删
+		"reloadFromBlank", // 页面不得自己重建
+		"notifyReload",    // 页面不得通知壳层重建
+		"BOOT_FRESH_MS",   // 「刚启动就失败 = 页面残废」的判定已删
 		"Promise.all([j('/api/query'), j('/api/accounts')])", // 改 allSettled
 	} {
 		if strings.Contains(src, dead) {
@@ -222,7 +222,8 @@ func TestIndexHelpIsConcise(t *testing.T) {
 
 // 设置页必须是四个分页签：通知 / 账号 / 数据 / 日志。
 // 用户原话：「通知/账号/数据/日志这四个吧，外观直接删除，
-//            主界面本来就有按钮了，设置里不再体现外观的设置。」
+//
+//	主界面本来就有按钮了，设置里不再体现外观的设置。」
 func TestSettingsHasFourTabs(t *testing.T) {
 	src := indexHTML
 	for _, want := range []string{
@@ -250,9 +251,9 @@ func TestSettingsHasFourTabs(t *testing.T) {
 func TestNoMoreDotsEntry(t *testing.T) {
 	src := indexHTML
 	for _, dead := range []string{
-		"c-more",             // 按钮类名
-		"openAccountMenu",    // 旧菜单函数
-		"ICON('more')",       // 三点图标
+		"c-more",          // 按钮类名
+		"openAccountMenu", // 旧菜单函数
+		"ICON('more')",    // 三点图标
 	} {
 		if strings.Contains(src, dead) {
 			t.Fatalf("残留「···」入口：%q", dead)
