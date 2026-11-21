@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 「回前台第一次读取必失败」的根因是复用了系统已回收的连接。
@@ -69,4 +70,38 @@ func TestLogRoundInherited(t *testing.T) {
 	if logs[1].Round != "" {
 		t.Fatalf("轮外日志不该带 round：%+v", logs[1])
 	}
+}
+
+// 日志时间必须按前端上报的本地时区换算，不能是 UTC。
+// 用户实测「日志里记录的时间差了 8 小时」——根因是 Go 在手机进程里读不到
+// 系统时区，time.Now() 一律当 UTC。前端带 X-TZ-Offset（东八区 -480），
+// logNow 要据此把时间拨回本地。
+func TestLogTimezoneOffset(t *testing.T) {
+	// 东八区：UTC-480，本地应比 UTC 快 8 小时
+	SetLogTimezone(-480)
+	now := logNow()
+	utcHour := time.Now().UTC().Hour()
+	localHour := now.Hour()
+	if diff := localHour - utcHour; diff != 8 {
+		// 跨日时小时会回绕（如 UTC 20 点 → 本地 04 点），按模 24 比
+		if (diff+24)%24 != 8 {
+			t.Fatalf("东八区本地时间应比 UTC 快 8 小时，实得差 %d（UTC %d / 本地 %d）", diff, utcHour, localHour)
+		}
+	}
+	// 零时区与无效头不能污染状态
+	SetLogTimezone(0)
+	if logNow().Location() != time.Local {
+		// off==0 时直接返回 time.Now()，应当落在 Local
+		t.Fatal("零时区应直接返回本机时间")
+	}
+	if _, ok := ParseTZHeader("oops"); ok {
+		t.Fatal("非数字时区头应被拒绝")
+	}
+	if _, ok := ParseTZHeader("9999"); ok {
+		t.Fatal("超出范围的时区头应被拒绝")
+	}
+	if n, ok := ParseTZHeader("-480"); !ok || n != -480 {
+		t.Fatalf("合法时区头解析失败：%d %v", n, ok)
+	}
+	SetLogTimezone(0) // 还原，避免影响其它测试
 }

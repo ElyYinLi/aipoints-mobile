@@ -304,3 +304,56 @@ func TestNotifyChannelsUseSmallRadius(t *testing.T) {
 		t.Fatal("渠道选择没有应用 seg wrap")
 	}
 }
+
+// 0.6.6：三处占空间的说明条要删掉（用户逐条点名）。
+func TestRemovedVerboseNotices(t *testing.T) {
+	src := indexHTML
+	for _, dead := range []string{
+		"备份里是明文 Cookie",
+		"按执行步骤逐条记录（含成功的请求）",
+		"账号管理都在这页完成",
+	} {
+		if strings.Contains(src, dead) {
+			t.Fatalf("说明条未删除：%q", dead)
+		}
+	}
+}
+
+// 0.6.6：添加账号弹层底部「直接手动粘贴凭据 / 导入备份」和「关闭」按钮都要删。
+// 关闭用 openSheet 的 hideCancel 选项，只影响这一个弹层。
+func TestAddSheetHasNoManualAndCancel(t *testing.T) {
+	src := indexHTML
+	if strings.Contains(src, "直接手动粘贴凭据 / 导入备份") {
+		t.Fatal("添加账号页仍有「直接手动粘贴凭据 / 导入备份」兜底按钮")
+	}
+	if !strings.Contains(src, "{ hideCancel: true }") {
+		t.Fatal("添加账号页没有隐藏「关闭」按钮")
+	}
+	// 但其它弹层仍要有「关闭」（通用组件不能被误删）
+	if !strings.Contains(src, "'sheet-cancel', '关闭'") {
+		t.Fatal("通用弹层的「关闭」按钮被误删")
+	}
+}
+
+// 0.6.6：账号名长按改备注——前端要有绑定与保存接口调用，后端要有路由。
+func TestLongPressRenameLabel(t *testing.T) {
+	src := indexHTML
+	for _, want := range []string{
+		"bindLabelLongPress",
+		"openLabelEdit",
+		"/api/account/label",
+		"长按修改备注",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("长按改备注缺少：%q", want)
+		}
+	}
+}
+
+// 0.6.6：每个请求都要带 X-TZ-Offset，否则日志时间差 8 小时。
+func TestRequestsCarryTZHeader(t *testing.T) {
+	src := indexHTML
+	if !strings.Contains(src, "opt.headers['X-TZ-Offset']") {
+		t.Fatal("请求未携带 X-TZ-Offset，日志会按 UTC 记时")
+	}
+}

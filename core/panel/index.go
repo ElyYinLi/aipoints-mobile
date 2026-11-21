@@ -767,6 +767,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     // 由用户决定（用户原话：「你现有的措施全部删掉」）。
     var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var opt = o || {};
+    // 每个请求都带本机 UTC 偏移（东八区 = -480）。Go 在手机进程里读不到系统时区，
+    // 日志时间戳全按 UTC 记，会比本地慢 8 小时。服务端 middleware 收到这个头后
+    // 换算日志时间。不能只在启动时报一次：进程重建 / WebView 重新加载后内存值会丢。
+    opt.headers = opt.headers || {};
+    opt.headers['X-TZ-Offset'] = String(new Date().getTimezoneOffset());
     var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
     if (ctrl) opt.signal = ctrl.signal;
     return fetch(u, opt).then(function(r){
@@ -801,15 +806,20 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     return id || '';
   }
   // 通用底部弹层。build(body, close) 里往 body 塞内容。
-  function openSheet(title, subtitle, build){
+  // opts.hideCancel：隐藏底部「关闭」按钮（仅添加账号页用，点遮罩仍可关闭）。
+  function openSheet(title, subtitle, build, opts){
+    opts = opts || {};
     var mask = el('div', 'mask');
     var sheet = el('div', 'sheet');
     sheet.appendChild(el('div', 'sheet-h', title));
     if (subtitle) sheet.appendChild(el('div', 'sheet-sub', subtitle));
     var body = el('div', '');
     sheet.appendChild(body);
-    var cancel = el('button', 'sheet-cancel', '关闭');
-    sheet.appendChild(cancel);
+    var cancel = null;
+    if (!opts.hideCancel){
+      cancel = el('button', 'sheet-cancel', '关闭');
+      sheet.appendChild(cancel);
+    }
     document.body.appendChild(mask);
     document.body.appendChild(sheet);
     requestAnimationFrame(function(){
@@ -823,7 +833,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       }, 240);
     }
     mask.addEventListener('click', close);
-    cancel.addEventListener('click', close);
+    if (cancel) cancel.addEventListener('click', close);
     if (build) build(body, close);
     return { el: sheet, body: body, close: close };
   }
@@ -2041,6 +2051,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   }
 
   function openAddSheet(){
+    // 底部不再有手动粘贴兜底按钮，也不显示关闭按钮——用户说这俩多余。
+    // 手动粘贴在选平台后的二级页里仍有；备份导入在「设置 → 数据」里也有。
+    // 点遮罩仍可关闭本弹层，点平台进入下一级也会自动关闭。
     openSheet('添加账号', '选平台后可以用网页登录，也可以直接粘贴凭据。', function(body, close){
       var ps = state.providers.length ? state.providers : [];
       if (!ps.length){
@@ -2054,14 +2067,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         });
         body.appendChild(row);
       });
-      // 不依赖平台列表、也不依赖网页登录的兜底入口
-      var manual = el('button', 'sheet-cancel', '直接手动粘贴凭据 / 导入备份');
-      manual.addEventListener('click', function(){
-        close();
-        setTimeout(function(){ openSettings(); }, 260);
-      });
-      body.appendChild(manual);
-    });
+    }, { hideCancel: true });
   }
 
   // 二级：同一个平台，两种添加方式
@@ -2424,17 +2430,68 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     loadCfg();
   }
 
-  // ---------- 账号 Tab ----------
-  // 卡片上的「···」删掉之后，账号管理（令牌 / 启停 / 删除）全部收到这里：
-  // 列表 → 点某个账号 → 详情。列表本身只做两件事：看状态、调顺序。
-  // ---------- 账号 Tab（0.6.5 改成行内操作） ----------
+  // ---------- 账号 Tab（0.6.5 行内操作，0.6.6 加长按改备注） ----------
   // 以前点整行进详情页，退出来还得重新进设置 → 账号，用户明确抱怨过。
   // 现在整行不可点，三个操作摆在右边，一屏之内做完所有事：
   //   令牌（仅支持 TokenManager 的平台）/ 停用·启用 / 删除（连点两次确认）
-  function buildAccountTab(pane){
-    pane.appendChild(el('div', 'notice soft',
-      '账号管理都在这页完成，不用点进去。添加账号用主界面底部的「添加账号」。'));
+  // 账号名长按可改备注（备注是用户自己起的识别名，不涉及凭据）。
+  function bindLabelLongPress(node, a, refresh){
+    var timer = null, fired = false, sx = 0, sy = 0;
+    function start(x, y){
+      fired = false; sx = x; sy = y;
+      timer = setTimeout(function(){
+        fired = true; timer = null;
+        openLabelEdit(a, refresh);
+      }, 500);
+    }
+    function cancel(){ if (timer){ clearTimeout(timer); timer = null; } }
+    function moved(x, y){ return Math.abs(x - sx) > 10 || Math.abs(y - sy) > 10; }
+    node.addEventListener('touchstart', function(e){
+      var t = e.touches[0]; if (t) start(t.clientX, t.clientY);
+    }, { passive: true });
+    node.addEventListener('touchmove', function(e){
+      var t = e.touches[0]; if (t && timer && moved(t.clientX, t.clientY)) cancel();
+    }, { passive: true });
+    node.addEventListener('touchend', cancel);
+    node.addEventListener('touchcancel', cancel);
+    node.addEventListener('mousedown', function(e){ start(e.clientX, e.clientY); });
+    node.addEventListener('mousemove', function(e){ if (timer && moved(e.clientX, e.clientY)) cancel(); });
+    node.addEventListener('mouseup', cancel);
+    node.addEventListener('mouseleave', cancel);
+    node.addEventListener('contextmenu', function(e){
+      e.preventDefault(); cancel(); openLabelEdit(a, refresh);
+    });
+  }
 
+  function openLabelEdit(a, refresh){
+    openSheet('修改备注', platformName(a.provider) + ' · ' + (a.account_id || ''), function(body, close){
+      var f = mkField('备注（留空则清除）', 'input', {
+        type: 'text', maxlength: '40', placeholder: '例如：主号 / 小号',
+        value: a.label || ''
+      });
+      f.input.value = a.label || '';
+      body.appendChild(f.wrap);
+      var btn = el('button', 'btn filled', '保存');
+      btn.style.width = '100%';
+      btn.style.marginTop = '12px';
+      btn.addEventListener('click', function(){
+        btn.disabled = true;
+        post('/api/account/label', {
+          provider: a.provider, account_id: a.account_id, label: f.input.value
+        }).then(function(res){
+          btn.disabled = false;
+          if (!res || !res.ok){ toast((res && res.error) || '保存失败'); return; }
+          toast('备注已更新'); close(); refresh(); load(true);
+        }).catch(function(e){
+          btn.disabled = false; toast('保存失败：' + e.message);
+        });
+      });
+      body.appendChild(btn);
+      setTimeout(function(){ try { f.input.focus(); } catch (e) {} }, 80);
+    });
+  }
+
+  function buildAccountTab(pane){
     var box = el('div', '');
     pane.appendChild(box);
 
@@ -2477,6 +2534,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       var info = el('div', 'acc-info');
       info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
       info.appendChild(el('i', '', (off ? '已停用 · ' : '') + a.account_id));
+      info.title = '长按修改备注';
+      bindLabelLongPress(info, a, refresh);
 
       var acts = el('div', 'acc-acts');
 
@@ -2545,9 +2604,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // ---------- 数据 Tab ----------
   // 备份导出 / 导入：整块搬过来，只是从「设置页往下滚很久」变成「点一下就到」。
   function buildDataTab(pane){
-    pane.appendChild(el('div', 'notice',
-      '备份里是明文 Cookie / Token，只存本机。别发到聊天、网盘或任何第三方。'));
-
     pane.appendChild(el('div', 'sect-h', '导出'));
     var fExp = mkField('备份内容（可长按全选复制）', 'textarea', {
       readonly: 'readonly', rows: '5', placeholder: '点下面的「生成备份」'
@@ -2614,10 +2670,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 0.6.4：按执行步骤逐条记录（含成功请求），每轮共用 #轮次号。
   // 默认「全部」，因为用户要看的正是「它到底跑了什么」。
   function buildLogTab(pane){
-    pane.appendChild(el('div', 'notice soft',
-      '按执行步骤逐条记录（含成功的请求）。每轮一键签到共用同一个 #轮次号，' +
-      '能顺出一条完整时间线。最多保留 1500 条，凭据一律脱敏，可直接复制发出去。'));
-
     var logBar = el('div', 'row-btns');
     var btnLogAll = el('button', 'btn filled', '全部');
     var btnLogErr = el('button', 'btn ghost', '只看异常');

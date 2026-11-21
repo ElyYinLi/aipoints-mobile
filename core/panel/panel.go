@@ -126,6 +126,7 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/account/add", s.handleAccountAdd)
 	mux.HandleFunc("/api/account/delete", s.handleAccountDelete)
 	mux.HandleFunc("/api/account/toggle", s.handleAccountToggle)
+	mux.HandleFunc("/api/account/label", s.handleAccountLabel)
 	mux.HandleFunc("/api/account/reorder", s.handleAccountReorder)
 	mux.HandleFunc("/api/probe", s.handleProbe)
 	mux.HandleFunc("/api/export", s.handleExport)
@@ -142,7 +143,7 @@ func New(opt Options) *Server {
 	// （攻击者把域名解析到 127.0.0.1 并从网页里读走账号数据）。
 	s.srv = &http.Server{
 		Addr:              opt.Addr,
-		Handler:           loopbackOnly(mux),
+		Handler:           loopbackOnly(withLogTimezone(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -153,6 +154,21 @@ func New(opt Options) *Server {
 // loopbackOnly 只接受 Host 为回环地址的请求。
 //
 // 为什么需要：服务只监听 127.0.0.1，但浏览器里任何网页都能向 127.0.0.1 发请求。
+// withLogTimezone 从每个请求头里读 X-TZ-Offset，更新日志时间戳的本地时区。
+//
+// 为什么绑在请求上而不是开机设一次：Go 在 gomobile 里读不到系统时区，
+// 唯一可信的来源是页面里的 new Date().getTimezoneOffset()。前端的 j()
+// 给每个请求都带上这个头，于是不管用户几点打开、跨不跨时区，日志里的时间
+// 都和手机本地一致。0.6.3 只修了推送通知的时间，日志漏了，这里补上。
+func withLogTimezone(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if off, ok := httpx.ParseTZHeader(r.Header.Get("X-TZ-Offset")); ok {
+			httpx.SetLogTimezone(off)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // DNS rebinding 能让攻击者域名解析到本机，从而读到 /api/query 里的账号信息。
 // 校验 Host 头即可挡住这类请求（WebView 加载的是 127.0.0.1:port，Host 必然匹配）。
 func loopbackOnly(next http.Handler) http.Handler {

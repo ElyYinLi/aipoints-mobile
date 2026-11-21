@@ -226,6 +226,57 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// handleAccountLabel 修改账号备注（label）。
+//
+// POST /api/account/label {"provider":"...","account_id":"...","label":"主号"}
+//
+// 前端长按账号名触发。走 List → 改 Label → Put，与 handleAccountToggle 同一条
+// 一致性路径：SecretJSON / Enabled / Order 全部原样带回，只改备注这一个字段。
+// label 允许传空串（清空备注），长度截断到 40 字符，防止超长 name 撑爆卡片。
+func (s *Server) handleAccountLabel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireStore(w) {
+		return
+	}
+	var in struct {
+		Provider  string `json:"provider"`
+		AccountID string `json:"account_id"`
+		Label     string `json:"label"`
+	}
+	if err := readBody(r, &in); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if in.Provider == "" || in.AccountID == "" {
+		writeJSON(w, map[string]any{"ok": false, "error": "缺少 provider / account_id"})
+		return
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	if len([]rune(in.Label)) > 40 {
+		in.Label = string([]rune(in.Label)[:40])
+	}
+	list, err := s.opt.Store.List()
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	for _, a := range list {
+		if a.Provider == in.Provider && a.AccountID == in.AccountID {
+			a.Label = in.Label
+			if err := s.opt.Store.Put(a); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true, "label": a.Label})
+			return
+		}
+	}
+	writeJSON(w, map[string]any{"ok": false, "error": "账号不存在"})
+}
+
 // handleAccountToggle 启用 / 停用账号。
 //
 // POST /api/account/toggle {"provider":"...","account_id":"...","enabled":false}

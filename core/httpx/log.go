@@ -2,10 +2,50 @@ package httpx
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// 日志时间的本地时区偏移。
+//
+// Go 在 gomobile 进程里读不到系统时区（没有 TZ 环境变量、没有 /etc/localtime），
+// time.Now() 一律按 UTC 算 —— 日志里的「7:26」实际是 UTC，比北京时间差 8 小时。
+// 推送通知早在 0.6.3 就用「前端上报 getTimezoneOffset」解决了同样的问题，
+// 这里照搬：前端每个请求带 X-TZ-Offset header，服务端 middleware 调 SetLogTimezone
+// 存下来，AddLog 据此换算。用 atomic 是因为日志由多个 goroutine 并发写。
+var logTZOffset int32
+
+// SetLogTimezone 设置日志时间相对 UTC 的偏移（JS getTimezoneOffset 的值，东八区 = -480）。
+// 传 0 表示 UTC（或本机就在零时区），此时不做换算。
+func SetLogTimezone(offsetMin int) {
+	atomic.StoreInt32(&logTZOffset, int32(offsetMin))
+}
+
+// logNow 返回按上报时区换算后的当前时间，供日志打时间戳用。
+func logNow() time.Time {
+	off := atomic.LoadInt32(&logTZOffset)
+	if off == 0 {
+		return time.Now()
+	}
+	// JS 的 getTimezoneOffset = UTC - 本地（分钟），东八区是 -480，
+	// 所以本地 = UTC - off，FixedZone 要传反号。
+	return time.Now().In(time.FixedZone("local", -int(off)*60))
+}
+
+// ParseTZHeader 把请求头里的 X-TZ-Offset 解析成分钟数；无效值返回 false。
+func ParseTZHeader(v string) (int, bool) {
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < -840 || n > 840 {
+		return 0, false
+	}
+	return n, true
+}
 
 // LogEntry 是一条对外可见的运行日志。
 //
@@ -61,7 +101,7 @@ func AddLog(e LogEntry) {
 	if e.Level == "" {
 		e.Level = "info"
 	}
-	now := time.Now()
+	now := logNow()
 	if e.Time == "" {
 		// 毫秒必须留：一轮签到里「查询 → 签到 → 核对」可能全在同一秒内发生，
 		// 只到秒就看不出先后，等于把执行逻辑糊成了一团（0.6.4 改）。
