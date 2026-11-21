@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.6.7-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.6.8-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -52,7 +52,7 @@
 | 💾 **免登录迁移** | 备份导出为真实文件（系统文件面板选位置），换机导入即恢复全部账号与登录态 |
 | 🧭 **内置运行日志** | 设置页可直接看每条失败请求的时间、路径、状态码与业务码，一键复制反馈；凭据自动脱敏 |
 | 🔑 **API 令牌管理** | AiPy 的调用密钥（`sk-` 开头）可在 App 内新建 / 启停 / 删除，额度、模型限制、IP 白名单都能改；误删正在用的那条会被拦下 |
-| 🔔 **签到通知** | 企业微信 / 钉钉 / 飞书 / Bark / 自定义 Webhook 五渠道，一次一键签到只推一条汇总，失败项置顶 |
+| 🔔 **签到通知** | 企业微信 / 钉钉 / 飞书 / Bark / 自定义 Webhook 五渠道，启用后每轮签到推一条汇总，失败项置顶 |
 | 🪶 **零框架** | 前端不用框架、不用打包器，包体为零，首屏无白屏等待 |
 
 ## 截图

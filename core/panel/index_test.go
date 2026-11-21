@@ -442,3 +442,58 @@ func TestHelpHasVersionAndNoCancel(t *testing.T) {
 		t.Fatal("版本号行缺少「已支持 N 个平台」")
 	}
 }
+
+// 0.6.8：账号页「令牌」说明里那句「只有支持令牌的平台（AiPy）才有这个按钮」删掉。
+func TestTokenNoteNoPlatformHint(t *testing.T) {
+	src := indexHTML
+	for _, dead := range []string{
+		"只有支持令牌的平台",
+		"才有这个按钮",
+	} {
+		if strings.Contains(src, dead) {
+			t.Fatalf("令牌说明仍残留平台限制提示：%q", dead)
+		}
+	}
+	if !strings.Contains(src, "noteLine('令牌'") {
+		t.Fatal("令牌说明行本身不应被删")
+	}
+}
+
+// 0.6.8：数据页导出区三个按钮合成一行，顺序为 生成 → 复制 → 导出。
+func TestDataTabExportButtonsInOneRow(t *testing.T) {
+	src := indexHTML
+	start := strings.Index(src, "function buildDataTab(")
+	if start < 0 {
+		t.Fatal("找不到 buildDataTab")
+	}
+	end := strings.Index(src[start:], "// ---------- 每日任务")
+	if end < 0 {
+		end = len(src) - start
+	}
+	body := src[start : start+end]
+
+	// 三个按钮必须是 生成 / 复制 / 导出 的新文案
+	for _, want := range []string{
+		"'btn ghost', '生成'",
+		"'btn ghost', '复制'",
+		"'btn ghost', '导出'",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("导出按钮缺少新文案：%q", want)
+		}
+	}
+	// 旧文案必须彻底消失
+	for _, dead := range []string{"'生成备份'", "'存成文件'", "'复制到剪贴板'"} {
+		if strings.Contains(body, dead) {
+			t.Fatalf("导出按钮仍是旧文案：%q", dead)
+		}
+	}
+	// append 顺序固定：生成 → 复制 → 导出；且单行 row-btns，复制不再独占一行
+	seq := "expBtns.appendChild(btnExp); expBtns.appendChild(btnCopy); expBtns.appendChild(btnFile);"
+	if !strings.Contains(body, seq) {
+		t.Fatal("导出按钮顺序不是 生成→复制→导出")
+	}
+	if strings.Contains(body, "btnCopy.style.width") {
+		t.Fatal("复制按钮仍被设成独占一行")
+	}
+}

@@ -66,7 +66,12 @@ func iconSVG(name string) string {
 }
 
 // appIcon 生成 App 图标（1024×1024，矢量，可直接导出 PNG）。
-// 设计：深蓝紫渐变底 + 白色「积分堆叠」符号 + 右上角签到勾。
+// 设计（0.6.8）：深蓝紫渐变底 + 白色 spark 双星，与面板左上角 logo 同源。
+// 用户反馈旧版「积分卡 + 签到勾」和左上角图标对不上，改为直接放大 spark 符号，
+// 桌面图标与界面里的品牌图形从此一致。
+//
+// 这两条 path 由 spark 的 24×24 网格坐标放大 30 倍、平移到画布中心得到，
+// 三端（assets/*.svg / *.png / Android ic_launcher.xml）共用同一组坐标，不要单独改。
 const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -74,17 +79,13 @@ const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"
       <stop offset="0.55" stop-color="#7B4DFF"/>
       <stop offset="1" stop-color="#C24DFF"/>
     </linearGradient>
-    <linearGradient id="s" x1="0.5" y1="0" x2="0.5" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0.32"/>
-    </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="232" fill="url(#g)"/>
-  <!-- 三层积分卡：自下而上收窄，读起来是「余额逐层累积」 -->
-  <rect x="292" y="676" width="440" height="118" rx="59" fill="url(#s)"/>
-  <rect x="264" y="512" width="496" height="118" rx="59" fill="url(#s)" opacity="0.78"/>
-  <rect x="236" y="348" width="552" height="118" rx="59" fill="#fff" opacity="0.96"/>
-  <!-- 签到勾：独立于卡片，落在右上角形成视觉重量 -->
-  <path d="M596 246l52 52 104-118" fill="none" stroke="#22D48A" stroke-width="58"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- spark 双星：与面板左上角 logo 同源，放大居中 -->
+  <!-- 主星：居中偏上 -->
+  <path d="M474.5,234.5 L531.5,387.5 L684.5,444.5 L531.5,501.5 L474.5,654.5 L417.5,501.5 L264.5,444.5 L417.5,387.5 Z"
+        fill="none" stroke="#fff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 副星：右下角，和左上角 logo 的大小对比一致 -->
+  <path d="M669.5,609.5 L693.5,675.5 L759.5,699.5 L693.5,723.5 L669.5,789.5 L645.5,723.5 L579.5,699.5 L645.5,675.5 Z"
+        fill="none" stroke="#fff" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`

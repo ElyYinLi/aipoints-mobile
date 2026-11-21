@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- App 图标：由 core/panel/icons.go 的 appIcon 转写为 Android VectorDrawable。
-     三层积分卡 + 签到勾，与面板内 logo 同源。
+     0.6.8：白色 spark 双星，与面板左上角 logo / iOS 图标同源，坐标三端共用。
      用矢量而非 PNG：一个文件适配所有密度，APK 体积不变大。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -23,18 +23,12 @@
         </aapt:attr>
     </path>
 
-    <!-- 第三层（最窄，底部） -->
-    <path android:fillColor="#66FFFFFF"
-        android:pathData="M351,676 L673,676 A59,59 0 0 1 673,794 L351,794 A59,59 0 0 1 351,676 Z" />
-    <!-- 第二层 -->
-    <path android:fillColor="#96FFFFFF"
-        android:pathData="M323,512 L701,512 A59,59 0 0 1 701,630 L323,630 A59,59 0 0 1 323,512 Z" />
-    <!-- 第一层（最宽，顶部，最亮） -->
-    <path android:fillColor="#F5FFFFFF"
-        android:pathData="M295,348 L729,348 A59,59 0 0 1 729,466 L295,466 A59,59 0 0 1 295,348 Z" />
-
-    <!-- 签到勾 -->
-    <path android:fillColor="#00000000" android:strokeColor="#FF22D48A"
-        android:strokeWidth="58" android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M596,246 L648,298 L752,180" />
+    <!-- 主星：居中偏上 -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="48" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M474.5,234.5 L531.5,387.5 L684.5,444.5 L531.5,501.5 L474.5,654.5 L417.5,501.5 L264.5,444.5 L417.5,387.5 Z" />
+    <!-- 副星：右下角 -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="46" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M669.5,609.5 L693.5,675.5 L759.5,699.5 L693.5,723.5 L669.5,789.5 L645.5,723.5 L579.5,699.5 L645.5,675.5 Z" />
 </vector>

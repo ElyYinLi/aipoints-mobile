@@ -31,7 +31,7 @@ import (
 )
 
 // Version 由壳层显示，构建时可通过 -ldflags 注入。
-var Version = "0.6.7"
+var Version = "0.6.8"
 
 type engine struct {
 	mu     sync.Mutex

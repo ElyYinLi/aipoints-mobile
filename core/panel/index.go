@@ -2464,7 +2464,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       d.appendChild(document.createTextNode('　' + txt));
       note.appendChild(d);
     }
-    noteLine('令牌', '平台发放的调用密钥（sk- 开头），用来代替登录凭据调用 API。点开可新建、复制、禁用。只有支持令牌的平台（AiPy）才有这个按钮。');
+    noteLine('令牌', '平台发放的调用密钥（sk- 开头），用来代替登录凭据调用 API。点开可新建、复制、禁用。');
     noteLine('停用', '暂时不参与查询和签到，凭据原样保留。按钮会变成「启用」，随时点回来。');
     noteLine('删除', '把这个账号和它保存的凭据一起删掉，不可恢复。点一次变「确认删」，再点一次才真删，4 秒不点自动取消。');
     pane.appendChild(note);
@@ -2568,20 +2568,19 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   function buildDataTab(pane){
     pane.appendChild(el('div', 'sect-h', '导出'));
     var fExp = mkField('备份内容（可长按全选复制）', 'textarea', {
-      readonly: 'readonly', rows: '5', placeholder: '点下面的「生成备份」'
+      readonly: 'readonly', rows: '5', placeholder: '点下面的「生成」'
     });
     fExp.input.className = 'mono';
     pane.appendChild(fExp.wrap);
 
+    // 0.6.8：三个按钮合成一行三等分，顺序固定为 生成 → 复制 → 导出。
+    // 以前「复制到剪贴板」独占一整行，占地方还得往下滚，用户要求收紧成一行。
     var expBtns = el('div', 'row-btns');
-    var btnExp = el('button', 'btn ghost', '生成备份');
-    var btnFile = el('button', 'btn ghost', '存成文件');
-    expBtns.appendChild(btnExp); expBtns.appendChild(btnFile);
+    var btnExp = el('button', 'btn ghost', '生成');
+    var btnCopy = el('button', 'btn ghost', '复制');
+    var btnFile = el('button', 'btn ghost', '导出');
+    expBtns.appendChild(btnExp); expBtns.appendChild(btnCopy); expBtns.appendChild(btnFile);
     pane.appendChild(expBtns);
-
-    var btnCopy = el('button', 'btn ghost', '复制到剪贴板');
-    btnCopy.style.width = '100%';
-    pane.appendChild(btnCopy);
 
     btnExp.addEventListener('click', function(){
       j('/api/export').then(function(d){
