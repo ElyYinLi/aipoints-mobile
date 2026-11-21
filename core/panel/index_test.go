@@ -259,8 +259,48 @@ func TestNoMoreDotsEntry(t *testing.T) {
 			t.Fatalf("残留「···」入口：%q", dead)
 		}
 	}
-	// 账号详情必须还在（入口挪到了设置 → 账号）
-	if !strings.Contains(src, "function openAccountDetail(") {
-		t.Fatal("账号详情被误删：令牌/停用/删除需要一个入口")
+	// 账号详情页必须删掉（0.6.5：整行进详情「返不回去」，用户明确要求改行内按钮）
+	if strings.Contains(src, "function openAccountDetail(") {
+		t.Fatal("账号详情页应已删除：操作改为设置 → 账号的行内按钮")
+	}
+}
+
+// 0.6.5：账号管理改成行内按钮 + 底部说明。
+// 用户原话：「点进详情之后我就返不回去了，还得再从设置里面进去一遍」，
+// 所以整行不再可点，令牌 / 停用 / 删除直接摆在行右侧。
+func TestAccountTabInlineActions(t *testing.T) {
+	src := indexHTML
+	for _, want := range []string{
+		"'a-btn key', '令牌'",
+		"'a-btn warn', '删除'",
+		"'acc-acts'",
+		"'acc-note'",
+		"确认删",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("账号行内操作缺少：%q", want)
+		}
+	}
+	// 三个按钮各自的意思必须写在底部
+	for _, k := range []string{"noteLine('令牌'", "noteLine('停用'", "noteLine('删除'"} {
+		if !strings.Contains(src, k) {
+			t.Fatalf("底部说明缺少：%q", k)
+		}
+	}
+	// 旧提示语必须消失
+	if strings.Contains(src, "点账号进入详情") {
+		t.Fatal("残留旧的「点账号进入详情」提示")
+	}
+}
+
+// 通知渠道是 5 个按钮，必然换行；999px 胶囊圆角换行后弧度大得离谱。
+// 0.6.5 单独收成 12px / 9px 的小圆角。
+func TestNotifyChannelsUseSmallRadius(t *testing.T) {
+	src := indexHTML
+	if !strings.Contains(src, ".seg.wrap{border-radius:12px") {
+		t.Fatal("渠道选择缺少小圆角样式 .seg.wrap")
+	}
+	if !strings.Contains(src, "'seg wrap'") {
+		t.Fatal("渠道选择没有应用 seg wrap")
 	}
 }

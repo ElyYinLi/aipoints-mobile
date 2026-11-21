@@ -501,6 +501,11 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 }
 .seg-item.on{background:var(--card);color:var(--on-surface);box-shadow:var(--shadow)}
 .seg-item:active{transform:scale(.97)}
+/* 通知页的渠道选择（0.6.5）：5 个渠道要换行成两三排，
+   999px 的胶囊圆角在换行后每条都变成一颗橄榄球，弧度大得离谱。
+   这里单独收成 12px 外框 / 9px 内块的小圆角，跟下面的输入框对齐。 */
+.seg.wrap{border-radius:12px;padding:5px;gap:5px;margin-bottom:12px}
+.seg.wrap .seg-item{border-radius:9px;padding:8px 6px;font-size:12.5px}
 
 /* ---- 设置页分页签（0.6.4） ----
    四个页签横向等分，切页时下方内容整体替换。没有二级弹层：
@@ -534,6 +539,41 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .nav-ic svg{width:19px;height:19px}
 .nav-go{color:var(--on-surface-v);flex:0 0 auto;display:grid;place-items:center}
 .nav-go svg{width:18px;height:18px}
+
+/* ---- 账号 Tab 的行内操作（0.6.5） ----
+   以前整行可点，进了详情页就退不回来（用户原话「还得再从设置里进去一遍」）。
+   现在整行不可点，三个操作直接摆在右边：令牌 / 停用 / 删除。 */
+.acc-row{
+  display:flex;align-items:center;gap:10px;
+  background:var(--surface-1);border-radius:var(--r-lg);
+  padding:10px 12px;margin-bottom:8px;
+}
+.acc-row .dot{
+  width:32px;height:32px;border-radius:10px;flex:0 0 auto;
+  display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px;
+}
+.acc-row.off .dot,.acc-row.off .acc-info{opacity:.5}
+.acc-acts{display:flex;gap:5px;flex:0 0 auto}
+.a-btn{
+  border:0;border-radius:9px;padding:7px 9px;line-height:1;
+  font-size:11.5px;font-weight:650;letter-spacing:.01em;
+  background:var(--surface-3);color:var(--on-surface);
+  transition:transform .12s,background .16s;
+}
+.a-btn:active{transform:scale(.94)}
+.a-btn:disabled{opacity:.5}
+.a-btn.key{background:var(--primary-c);color:var(--on-primary-c)}
+.a-btn.warn{background:var(--bad-c);color:var(--bad)}
+/* 确认删：反色高亮。文字色必须用 --surface 而不是 #fff——
+   深色主题下 --bad 是浅粉（#FFB4AB），白字在上面根本看不清。 */
+.a-btn.arm{background:var(--bad);color:var(--surface);box-shadow:0 0 0 2px var(--bad-c)}
+/* 底部说明：把三个按钮的意思写清楚，省掉「点进去才知道」 */
+.acc-note{
+  margin-top:14px;padding:11px 13px;border-radius:var(--r-md);
+  background:var(--surface-2);font-size:11.5px;line-height:1.65;color:var(--on-surface-v);
+}
+.acc-note div+div{margin-top:7px}
+.acc-note b{color:var(--on-surface);font-weight:660}
 
 /* ---- 令牌列表（0.6.0） ----
    一条令牌 = 名称 + 完整 key + 额度；操作排在卡片底部一行。
@@ -2250,7 +2290,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
       // 渠道：五个渠道挤在一行会换行错位，用 3 列网格
       pane.appendChild(el('div', 'sect-h', '渠道'));
-      var seg = el('div', 'seg');
+      var seg = el('div', 'seg wrap');
       seg.style.flexWrap = 'wrap';
       NOTIFY_TYPES.forEach(function(t){
         var b = el('button', 'seg-item' + (cfg.type === t.id ? ' on' : ''), t.name.split('（')[0]);
@@ -2387,44 +2427,118 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // ---------- 账号 Tab ----------
   // 卡片上的「···」删掉之后，账号管理（令牌 / 启停 / 删除）全部收到这里：
   // 列表 → 点某个账号 → 详情。列表本身只做两件事：看状态、调顺序。
-  function buildAccountTab(pane, close){
-    var tip = el('div', 'notice soft',
-      '点账号进入详情，可管理 API 令牌、启用停用、删除。添加账号在主界面底部按钮。');
-    pane.appendChild(tip);
+  // ---------- 账号 Tab（0.6.5 改成行内操作） ----------
+  // 以前点整行进详情页，退出来还得重新进设置 → 账号，用户明确抱怨过。
+  // 现在整行不可点，三个操作摆在右边，一屏之内做完所有事：
+  //   令牌（仅支持 TokenManager 的平台）/ 停用·启用 / 删除（连点两次确认）
+  function buildAccountTab(pane){
+    pane.appendChild(el('div', 'notice soft',
+      '账号管理都在这页完成，不用点进去。添加账号用主界面底部的「添加账号」。'));
 
     var box = el('div', '');
     pane.appendChild(box);
 
+    var note = el('div', 'acc-note');
+    function noteLine(k, txt){
+      var d = el('div', '');
+      d.appendChild(el('b', '', k));
+      d.appendChild(document.createTextNode('　' + txt));
+      note.appendChild(d);
+    }
+    noteLine('令牌', '平台发放的调用密钥（sk- 开头），用来代替登录凭据调用 API。点开可新建、复制、禁用。只有支持令牌的平台（AiPy）才有这个按钮。');
+    noteLine('停用', '暂时不参与查询和签到，凭据原样保留。按钮会变成「启用」，随时点回来。');
+    noteLine('删除', '把这个账号和它保存的凭据一起删掉，不可恢复。点一次变「确认删」，再点一次才真删，4 秒不点自动取消。');
+    pane.appendChild(note);
+
     function refresh(){
+      box.textContent = '';
       j('/api/accounts').then(function(list){
         box.textContent = '';
         if (!Array.isArray(list) || !list.length){
           box.appendChild(el('div', 'sheet-sub', '还没有账号，点主界面底部「添加账号」。'));
           return;
         }
-        list.forEach(function(a){
-          var row = el('button', 'nav-row');
-          var dot = el('span', 'dot');
-          var h = hueOf(a.provider);
-          dot.style.background = 'linear-gradient(135deg,hsl(' + h + ',72%,58%),hsl(' + ((h + 34) % 360) + ',72%,50%))';
-          dot.textContent = initials(platformName(a.provider));
-          var info = el('span', 'acc-info');
-          info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
-          info.appendChild(el('i', '', (a.enabled ? '' : '已停用 · ') + a.account_id));
-          var go = el('span', 'nav-go'); go.innerHTML = ICON('arrow');
-          row.appendChild(dot); row.appendChild(info); row.appendChild(go);
-          if (!a.enabled) row.className += ' off';
-          row.addEventListener('click', function(){
-            close();
-            setTimeout(function(){ openAccountDetail(a); }, 240);
-          });
-          box.appendChild(row);
-        });
+        list.forEach(function(a){ box.appendChild(accountRow(a)); });
       }).catch(function(e){
         box.textContent = '';
         box.appendChild(el('div', 'sheet-sub', '读取账号失败：' + e.message));
       });
     }
+
+    function accountRow(a){
+      var off = a.enabled === false;
+      var row = el('div', 'acc-row' + (off ? ' off' : ''));
+
+      var dot = el('span', 'dot');
+      var h = hueOf(a.provider);
+      dot.style.background = 'linear-gradient(135deg,hsl(' + h + ',72%,58%),hsl(' + ((h + 34) % 360) + ',72%,50%))';
+      dot.textContent = initials(platformName(a.provider));
+
+      var info = el('div', 'acc-info');
+      info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
+      info.appendChild(el('i', '', (off ? '已停用 · ' : '') + a.account_id));
+
+      var acts = el('div', 'acc-acts');
+
+      // 令牌只给支持 TokenManager 的平台（现在只有 AiPy）
+      if (hasTokens(a)){
+        var bk = el('button', 'a-btn key', '令牌');
+        bk.addEventListener('click', function(){ openTokens(a); });
+        acts.appendChild(bk);
+      }
+
+      var bt = el('button', 'a-btn', off ? '启用' : '停用');
+      bt.addEventListener('click', function(){
+        bt.disabled = true;
+        post('/api/account/toggle', {
+          provider: a.provider, account_id: a.account_id, enabled: off
+        }).then(function(res){
+          bt.disabled = false;
+          if (!res || !res.ok){ toast((res && res.error) || '操作失败'); return; }
+          toast(off ? '已启用' : '已停用');
+          refresh(); load(true);
+        }).catch(function(e){
+          bt.disabled = false; toast('操作失败：' + e.message);
+        });
+      });
+      acts.appendChild(bt);
+
+      // 删除：连点两次确认。不弹确认框，是因为弹层本身也是「点进去出不来」的一种
+      var bd = el('button', 'a-btn warn', '删除');
+      var armed = false, tmr = null;
+      function disarm(){
+        armed = false;
+        if (tmr){ clearTimeout(tmr); tmr = null; }
+        bd.textContent = '删除'; bd.className = 'a-btn warn'; bd.disabled = false;
+      }
+      bd.addEventListener('click', function(){
+        if (!armed){
+          armed = true;
+          bd.textContent = '确认删'; bd.className = 'a-btn arm';
+          tmr = setTimeout(disarm, 4000);
+          return;
+        }
+        bd.disabled = true; bd.textContent = '删除中';
+        post('/api/account/delete', { provider: a.provider, account_id: a.account_id })
+          .then(function(res){
+            if (!res || !res.ok){
+              toast((res && res.error) || '删除失败');
+              disarm();
+              return;
+            }
+            toast('已删除账号');
+            refresh(); load(true);
+          }).catch(function(e){
+            toast('删除失败：' + e.message);
+            disarm();
+          });
+      });
+      acts.appendChild(bd);
+
+      row.appendChild(dot); row.appendChild(info); row.appendChild(acts);
+      return row;
+    }
+
     refresh();
   }
 
@@ -3025,86 +3139,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     });
   }
 
-  /* ---------- 卡片右上角 ···：单账号操作 ----------
-     用户反馈卡片上并排四个按钮太挤，而这三项都不是每次都要点的。
-     卡片上只留「签到」这一个高频动作，剩下的进菜单。 */
-  // 账号详情（0.6.4）
-  //
-  // 从前它是卡片右上角「···」弹出的菜单，0.6.4 把 ··· 全删了，入口改成
-  // 「设置 → 账号 → 点某个账号」。内容不变：API 令牌 / 启停 / 删除。
-  //
-  // r 可以是列表里的完整行，也可以是 /api/accounts 返回的精简项——
-  // 后者没有 has_tokens 字段，所以令牌入口按 hasTokens 兜底判断。
-  function openAccountDetail(r){
-    var name = platformName(r.provider);
-    openSheet(name, r.label || r.account_id || '', function(body, close){
-      function navItem(icon, title, sub, fn){
-        var b = el('button', 'sheet-item');
-        var ic = el('span', 'sheet-dot');
-        ic.style.background = 'var(--surface-3)';
-        ic.style.color = 'var(--on-surface-v)';
-        ic.innerHTML = ICON(icon);
-        ic.querySelector('svg').style.width = '19px';
-        ic.querySelector('svg').style.height = '19px';
-        b.appendChild(ic);
-        var tx = el('span', 'sheet-txt');
-        tx.appendChild(el('b', '', title));
-        tx.appendChild(el('i', '', sub));
-        b.appendChild(tx);
-        var ar = el('span', 'sheet-arw'); ar.innerHTML = ICON('arrow');
-        b.appendChild(ar);
-        b.addEventListener('click', function(){ close(); setTimeout(fn, 240); });
-        body.appendChild(b);
-        return b;
-      }
-
-      var info = el('div', 'sheet-sub', '账号 ID：' + (r.account_id || '—'));
-      body.appendChild(info);
-
-      // 菜单里只留「API 令牌」。
-      //
-      // 任务和抽奖已经在卡片的按钮区直接摆着（卡片和紧凑行都有），
-      // 再在菜单里重复一遍既占位置又多一次点击。用户的原话是
-      // 「aipy 的菜单里只放 api 令牌」——这里照做，别的都不放。
-      // 令牌只在支持 TokenManager 的平台出现（目前只有 AiPy），由 Meta.Tokens 决定。
-      if (hasTokens(r)) navItem('key', 'API 令牌', '管理平台调用密钥', function(){ openTokens(r); });
-
-      var toggle = el('button', 'sheet-item');
-      var tt = el('span', 'sheet-txt');
-      tt.appendChild(el('b', '', r.enabled === false ? '启用此账号' : '停用此账号'));
-      tt.appendChild(el('i', '', '停用后不参与查询与签到，凭据保留'));
-      toggle.appendChild(tt);
-      toggle.addEventListener('click', function(){
-        post('/api/account/toggle', {
-          provider: r.provider, account_id: r.account_id, enabled: r.enabled === false
-        }).then(function(res){
-          if (!res.ok){ toast(res.error || '操作失败'); return; }
-          toast('已更新'); close(); load(true);
-        }).catch(function(e){ toast('操作失败：' + e.message); });
-      });
-      body.appendChild(toggle);
-
-      var del = el('button', 'sheet-item');
-      var dt = el('span', 'sheet-txt');
-      dt.appendChild(el('b', '', '删除账号'));
-      dt.appendChild(el('i', '', '会同时删掉保存的凭据，需要再点一次确认'));
-      del.appendChild(dt);
-      var armed = false;
-      del.addEventListener('click', function(){
-        if (!armed){
-          armed = true; dt.firstChild.textContent = '再点一次确认删除';
-          setTimeout(function(){ armed = false; dt.firstChild.textContent = '删除账号'; }, 4000);
-          return;
-        }
-        post('/api/account/delete', { provider: r.provider, account_id: r.account_id })
-          .then(function(res){
-            if (!res.ok){ toast(res.error || '删除失败'); return; }
-            toast('已删除账号'); close(); load(true);
-          }).catch(function(e){ toast('删除失败：' + e.message); });
-      });
-      body.appendChild(del);
-    });
-  }
+  /* ---------- 卡片右上角 ···：已删除（0.6.4） ----------
+     0.6.5：连账号详情也删了。用户的原话是「点进详情之后我就返不回去了，
+     还得再从设置里面进去一遍，这个设计得很让人蛋疼」。
+     现在令牌 / 停用 / 删除全部摆在设置 → 账号的行内，不再有二级页。 */
 
   /* ---------- API 令牌管理（0.6.0，仅 AiPy 等支持平台） ----------
      用户要求：列表要显示 model_limits / allow_ips，且可编辑。
