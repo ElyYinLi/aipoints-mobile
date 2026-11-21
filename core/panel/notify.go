@@ -90,7 +90,9 @@ var notifyTypes = []string{"wecom", "dingtalk", "feishu", "bark", "custom"}
 func newNotifier(dir string) *notifier {
 	n := &notifier{
 		cfg: NotifyConfig{
-			Type: "wecom", OnSuccess: true, OnFailure: true, OnManual: true, OnStart: false,
+			// 0.6.7：「什么时候推」开关全删，这三态固定为开。
+			// OnSuccess/OnFailure 已不再参与 send 判断，保留 true 仅为数据自洽。
+			Type: "wecom", OnSuccess: true, OnFailure: true, OnManual: true, OnStart: true, Always: true,
 		},
 	}
 	if dir == "" {
@@ -106,6 +108,11 @@ func newNotifier(dir string) *notifier {
 	if n.cfg.Type == "" {
 		n.cfg.Type = "wecom"
 	}
+	// 存量配置里 on_start=false / always=false 是常态，而这些开关已从界面删除。
+	// 归一化到恒开，保证读旧配置的用户也能照常收到每一轮推送。
+	n.cfg.OnStart = true
+	n.cfg.OnManual = true
+	n.cfg.Always = true
 	return n
 }
 
@@ -156,6 +163,8 @@ func (n *notifier) save(c NotifyConfig) error {
 	if c.URL != "" && !strings.HasPrefix(c.URL, "http://") && !strings.HasPrefix(c.URL, "https://") {
 		return fmt.Errorf("Webhook 地址必须以 http:// 或 https:// 开头")
 	}
+	// 0.6.7：触发开关已从界面删除，落库时固定为恒开，避免旧 payload 写回 false。
+	c.OnStart, c.OnManual, c.Always = true, true, true
 	n.mu.Lock()
 	n.cfg = c
 	// 用户改了地址就重置失败计数，否则改了地址横幅还挂着
@@ -296,34 +305,14 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 	n.mu.Unlock()
 
 	if !force {
+		// 0.6.7：用户拍板「什么时候推」那四个开关全部删掉，固定为
+		// 「打开 App 自动签到 / 手动点一键签到 / always」三态全开。
+		// 也就是说：只要通知启用了，每一轮签到都推，不再按触发源和结果类型过滤。
+		// 存量配置（on_start=false / always=false）绝不参与判断——用户已经看不到
+		// 这些开关了，再读旧值会导致「删了开关却收不到推送」。
 		if !cfg.Enabled || cfg.URL == "" || disabled {
 			// 未配置 / 已被停用：静默跳过，不打扰用户
 			return n.skip(p, "通知未启用或已被关闭")
-		}
-		hasFail := false
-		for _, a := range p.Accounts {
-			if a.Status == "fail" {
-				hasFail = true
-			}
-		}
-		// 按触发源过滤：启动签到默认不推，避免一天开几次 App 收几条
-		if p.Trigger == "start" && !cfg.OnStart {
-			// 0.6.1：这条以前只是静默跳过，用户在 iOS 上完全不知道自己
-			// 「平时打开 App 那一轮」被这个开关挡掉了——他看到的现象是
-			// 「发测试收得到，正常签到收不到」。把原因带回前端，设置页才解释得清。
-			return n.skip(p, "未开启「打开 App 自动签到后」推送")
-		}
-		if p.Trigger == "manual" && !cfg.OnManual {
-			return n.skip(p, "未开启「手动签到后推送」")
-		}
-		// Always 一票否决：用户明确说「没事也要告诉我」时不再看结果类型
-		if !cfg.Always {
-			if hasFail && !cfg.OnFailure {
-				return n.skip(p, "未开启「失败时推送」")
-			}
-			if !hasFail && !cfg.OnSuccess {
-				return n.skip(p, "未开启「成功时推送」")
-			}
 		}
 	}
 

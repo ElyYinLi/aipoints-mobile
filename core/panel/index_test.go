@@ -357,3 +357,88 @@ func TestRequestsCarryTZHeader(t *testing.T) {
 		t.Fatal("请求未携带 X-TZ-Offset，日志会按 UTC 记时")
 	}
 }
+
+// 0.6.7：通知页的「什么时候推」四个触发开关 + 「重发上次」按钮全删。
+// 用户拍板固定为「打开 App 自动 / 手动一键 / always」三态全开，
+// 界面上不再有任何触发源/结果类型的分支开关。
+func TestNotifyTabHasNoTriggerSwitches(t *testing.T) {
+	src := indexHTML
+	start := strings.Index(src, "function buildNotifyTab(")
+	if start < 0 {
+		t.Fatal("找不到 buildNotifyTab")
+	}
+	end := strings.Index(src[start:], "\n  /* ---------- ")
+	if end < 0 {
+		end = len(src) - start
+	}
+	body := src[start : start+end]
+	// 「什么时候推」四个开关由 toggleRow 渲染，必须彻底消失
+	for _, dead := range []string{
+		"toggleRow(",           // 触发开关渲染函数
+		"重发上次",                 // 重发按钮文案
+		"'/api/notify/resend'", // 重发接口调用
+	} {
+		if strings.Contains(body, dead) {
+			t.Fatalf("通知页仍残留触发开关/重发入口：%q", dead)
+		}
+	}
+	// payload 里三态写死 true（配置数据自洽），不能读 cfg 的旧值
+	if !strings.Contains(body, "on_success: true, on_failure: true, always: true,") {
+		t.Fatal("通知 payload 未把结果类型写死为 true")
+	}
+	if !strings.Contains(body, "on_manual: true, on_start: true") {
+		t.Fatal("通知 payload 未把触发源写死为 true")
+	}
+	// 通知页只剩：启用开关 / 渠道 / Webhook / 保存 / 发测试
+	for _, want := range []string{"'启用通知'", "'渠道'", "'Webhook 地址'", "'保存'", "'发测试'"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("通知页缺少应有的控件：%q", want)
+		}
+	}
+}
+
+// 0.6.7：设置弹层顶部「设置」两字、每页版本号、底部关闭按钮全部去掉。
+func TestSettingsSheetStripped(t *testing.T) {
+	src := indexHTML
+	start := strings.Index(src, "function openSettings(){")
+	if start < 0 {
+		t.Fatal("找不到 openSettings")
+	}
+	end := strings.Index(src[start:], "// ---------- 通知 Tab ----------")
+	body := src[start : start+end]
+	if !strings.Contains(body, "{ hideTitle: true, hideCancel: true }") {
+		t.Fatal("设置弹层未同时隐藏标题与关闭按钮")
+	}
+	// 版本号 meta 不能再出现在设置页（已迁到 openHelp）
+	if strings.Contains(body, "j('/api/meta')") || strings.Contains(body, "'meta', '版本") {
+		t.Fatal("设置页仍残留版本号 meta 请求/渲染")
+	}
+	// openSheet 必须支持 hideTitle 选项（通用组件能力）
+	if !strings.Contains(src, "if (!opts.hideTitle) sheet.appendChild(el('div', 'sheet-h', title))") {
+		t.Fatal("openSheet 不支持 hideTitle 选项")
+	}
+}
+
+// 0.6.7：版本号迁到「签到逻辑」页最下方，且该页关闭按钮去掉；
+// 版本号请求同时填充 state.meta 供日志导出复用。
+func TestHelpHasVersionAndNoCancel(t *testing.T) {
+	src := indexHTML
+	start := strings.Index(src, "function openHelp(){")
+	if start < 0 {
+		t.Fatal("找不到 openHelp")
+	}
+	end := strings.Index(src[start:], "\n  /* ---------- 设置")
+	body := src[start : start+end]
+	if !strings.Contains(body, "{ hideCancel: true }") {
+		t.Fatal("签到逻辑页未隐藏关闭按钮")
+	}
+	if !strings.Contains(body, "j('/api/meta')") {
+		t.Fatal("签到逻辑页未请求版本号")
+	}
+	if !strings.Contains(body, "state.meta = m") {
+		t.Fatal("版本号结果未写入 state.meta（日志导出头会退化）")
+	}
+	if !strings.Contains(body, "' · 已支持 '") {
+		t.Fatal("版本号行缺少「已支持 N 个平台」")
+	}
+}

@@ -806,12 +806,13 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     return id || '';
   }
   // 通用底部弹层。build(body, close) 里往 body 塞内容。
-  // opts.hideCancel：隐藏底部「关闭」按钮（仅添加账号页用，点遮罩仍可关闭）。
+  // opts.hideCancel：隐藏底部「关闭」按钮（添加账号 / 设置 / 签到逻辑页用，点遮罩仍可关闭）。
+  // opts.hideTitle：隐藏顶部标题栏（设置页要求「设置」两字不显示）。
   function openSheet(title, subtitle, build, opts){
     opts = opts || {};
     var mask = el('div', 'mask');
     var sheet = el('div', 'sheet');
-    sheet.appendChild(el('div', 'sheet-h', title));
+    if (!opts.hideTitle) sheet.appendChild(el('div', 'sheet-h', title));
     if (subtitle) sheet.appendChild(el('div', 'sheet-sub', subtitle));
     var body = el('div', '');
     sheet.appendChild(body);
@@ -1889,15 +1890,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   //
   // 三条规则，全部来自用户要求与实际踩坑：
   //   1. 一次一键签到只推一条汇总，不逐账号发；
-  //   2. 触发时机由后端配置决定（手动 / 启动 / 是否连「无事发生」也推），
-  //      前端不判断，只如实上报——否则改配置还得改前端；
+  //   2. 0.6.7 起「什么时候推」开关全删：启用通知后每轮都推，前端只如实上报；
   //   3. 推送本身失败绝不弹错、绝不影响签到结果，只在控制台留一行。
-  //   4. 有 on_failure 需求的人要的是「一条都不动也让我知道」，所以这里
-  //      只要这一轮确实扫过账号就上报（stat.lines 非空），空列表才跳过。
-  // 最近一次推送的明细，给设置页的「重发上次结果」用。
-  // 只放内存：它是诊断辅助，重启 App 后重新跑一轮就有新的，不必落盘。
-  var lastLines = [], lastSummary = '';
-
+  // 只要这一轮确实扫过账号就上报，空列表才跳过。
   function pushSummary(trigger, stat, sum){
     // 关键修复（0.6.1）：以前 lines 只在「逐个签到」的循环里填充，
     // 而循环只遍历未签账号。账号全部已签时 todo 为空 → lines 为空 →
@@ -1908,7 +1903,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     // 于是永远走不到推送。而发测试是 force=true 绕过了所有过滤。
     //
     // 现在补齐兜底：这轮确实扫过账号（state.rows 非空）但没有产生签到明细时，
-    // 按 rows 组装一份「全部已签」的明细照样上报，推不推由后端开关决定。
+    // 按 rows 组装一份「全部已签」的明细照样上报，交给后端推送。
     var lines = (stat && stat.lines) || [];
     if (!lines.length){
       var fallback = [];
@@ -1925,7 +1920,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       if (!fallback.length) return;
       lines = fallback;
     }
-    lastLines = lines; lastSummary = sum || '';
     post('/api/notify', {
       trigger: trigger || 'manual',
       accounts: lines,
@@ -2174,6 +2168,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 只说机制本身，不讲背景故事。用户原话：「只写你的签到逻辑就行了，
   // 没必要写那么一大堆」。所以压成三条，一屏能看完。
   function openHelp(){
+    // 0.6.7：版本号从「设置」页迁到这里——它是本页唯一一处版本信息。
+    // 顺带把 /api/meta 的结果存进 state.meta，供日志导出头复用（原来由设置页填充）。
     openSheet('签到逻辑', '三条，看完就清楚。', function(body, close){
       function para(title, text){
         body.appendChild(el('div', 'sect-h', title));
@@ -2192,7 +2188,15 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       para('③ 只处理「未签」的账号',
         '已签的账号不会再发请求。百度搭子的每日积分由平台在你当天第一次访问时发放，' +
         '所以我们看到它「已签」是真实状态。');
-    });
+
+      var meta = el('div', 'meta', '版本 —');
+      body.appendChild(meta);
+      j('/api/meta').then(function(m){
+        state.meta = m || null;
+        meta.textContent = '版本 ' + ((m && m.version) || '—') +
+          ' · 已支持 ' + ((m && m.providers) || 0) + ' 个平台';
+      }).catch(function(){ /* 版本号取不到不影响使用，保持「版本 —」 */ });
+    }, { hideCancel: true });
   }
 
   /* ---------- 设置（0.6.4：四个分页签） ----------
@@ -2211,7 +2215,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     ];
     var cur = 'notify';
 
-    openSheet('设置', '', function(body, close){
+    // 0.6.7：「设置」标题、每页下方的版本号+平台数、底部关闭按钮全部去掉。
+    // 版本号移到「签到逻辑」页。点遮罩仍可关闭本弹层。
+    openSheet('', '', function(body, close){
       // 分页签：横向四等分，当前页签用实心胶囊，一眼知道在哪一页
       var bar = el('div', 'seg');
       var pane = el('div', 'tab-pane');
@@ -2235,22 +2241,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       body.appendChild(bar);
       body.appendChild(pane);
 
-      var meta = el('div', 'meta', '版本 —');
-      body.appendChild(meta);
-      j('/api/meta').then(function(m){
-        state.meta = m || null;
-        meta.textContent = '版本 ' + ((m && m.version) || '—') +
-          ' · 已支持 ' + ((m && m.providers) || 0) + ' 个平台';
-      }).catch(function(){});
-
       var BUILDERS = { notify: buildNotifyTab, account: buildAccountTab, data: buildDataTab, log: buildLogTab };
       pick(cur);
-    });
+    }, { hideTitle: true, hideCancel: true });
   }
 
   // ---------- 通知 Tab ----------
   // 原来这一整块是「设置 → 签到通知 → 又弹一层」。现在直接摊在这一页里，
-  // 进来就能看到「开没开、推什么、什么时候推」。
+  // 进来就能看到「开没开、推到哪、地址对不对」。
   function buildNotifyTab(pane, close){
     var cfg = null;
     var loading = el('div', 'sheet-sub', '加载中…');
@@ -2323,33 +2321,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       fUrl.input.className = 'mono';
       pane.appendChild(fUrl.wrap);
 
-      // 触发时机：四个开关合到一张卡里，比散落四个区块省一屏
-      pane.appendChild(el('div', 'sect-h', '什么时候推'));
-      var card = el('div', 'sect-card');
-      function toggleRow(key, title, sub){
-        var row = el('div', 'chk');
-        var t = el('div', 'chk-t');
-        t.appendChild(el('b', '', title));
-        t.appendChild(el('i', '', sub));
-        var s = el('button', 'sw' + (cfg[key] ? ' on' : ''));
-        s.addEventListener('click', function(){
-          cfg[key] = !cfg[key];
-          s.className = 'sw' + (cfg[key] ? ' on' : '');
-        });
-        row.appendChild(t); row.appendChild(s);
-        card.appendChild(row);
-      }
-      toggleRow('on_manual', '手动一键签到后', '点底部按钮跑完一轮时推送');
-      toggleRow('on_start', '打开 App 自动签到后', '默认关闭：会天天收到一条');
-      toggleRow('on_failure', '有账号签到失败时', '失败要第一时间知道，建议开启');
-      toggleRow('always', '一条都没签成也推', '全部已签/全部失败时也发一条，用来确认程序确实跑过');
-      pane.appendChild(card);
+      // 0.6.7：「什么时候推」四个开关全部删掉——用户拍板固定为
+      // 「打开 App 自动签到 / 手动点一键签到 / always」三态全开，
+      // 启用通知后每轮签到都推，不再有触发源/结果类型的分支。
 
       var btns = el('div', 'row-btns');
       var btnSave = el('button', 'btn filled', '保存');
       var btnTest = el('button', 'btn ghost', '发测试');
-      var btnResend = el('button', 'btn ghost', '重发上次');
-      btns.appendChild(btnSave); btns.appendChild(btnTest); btns.appendChild(btnResend);
+      btns.appendChild(btnSave); btns.appendChild(btnTest);
       pane.appendChild(btns);
 
       var out = el('div', 'sheet-sub', '');
@@ -2374,8 +2353,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         return {
           enabled: !!cfg.enabled, type: cfg.type || 'wecom',
           url: fUrl.input.value.trim(),
-          on_success: true, on_failure: !!cfg.on_failure, always: !!cfg.always,
-          on_manual: !!cfg.on_manual, on_start: !!cfg.on_start
+          // 触发开关已删，后端也固定恒推；这里写死 true 保持配置数据自洽
+          on_success: true, on_failure: true, always: true,
+          on_manual: true, on_start: true
         };
       }
 
@@ -2407,24 +2387,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         }).catch(function(e){ btnTest.disabled = false; out.textContent = '发送失败：' + e.message; });
       });
 
-      // 重发上次结果：拿最近一轮的明细原样再发一条（force 绕过所有开关）。
-      // 能发出去 = 配置和网络都没问题；发不出去 = 错就在这一下里。
-      btnResend.addEventListener('click', function(){
-        if (!lastLines.length){
-          out.textContent = '还没有可重发的记录：先回主页跑一次签到。';
-          return;
-        }
-        btnResend.disabled = true; out.textContent = '正在重发上次结果…';
-        post('/api/notify', {
-          trigger: 'manual', accounts: lastLines, summary: lastSummary,
-          tz_offset: new Date().getTimezoneOffset(), force: true
-        }).then(function(r){
-          btnResend.disabled = false;
-          if (!r || r.ok === false){ out.textContent = '重发失败：' + ((r && r.error) || '未知错误'); return; }
-          if (r.sent === false){ out.textContent = '重发未送达：' + (r.error || '未知原因'); return; }
-          out.textContent = '已重发（' + lastLines.length + ' 个账号），看看收到没有。';
-        }).catch(function(e){ btnResend.disabled = false; out.textContent = '重发失败：' + e.message; });
-      });
     }
 
     loadCfg();
@@ -2999,197 +2961,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     { id: 'custom', name: '自定义 Webhook', ph: 'example.com/hook' }
   ];
 
-  function openNotify(){
-    var cfg = null;
-    openSheet('签到通知', '一次一键签到推一条汇总，不逐条刷屏。', function(body, close){
-      var box = el('div', '');
-      box.appendChild(el('div', 'sheet-sub', '加载中…'));
-      body.appendChild(box);
-      // 重发按钮在 render() 里重建，这里先声明，绑定放在末尾
-      var btnResend = null;
-
-      function loadCfg(){
-        j('/api/notify/config').then(function(res){
-          box.textContent = '';
-          if (!res || res.ok === false){
-            box.appendChild(el('div', 'sheet-sub', (res && res.error) || '读取失败'));
-            return;
-          }
-          cfg = res.config || {};
-          render(res);
-        }).catch(function(e){
-          box.textContent = '';
-          box.appendChild(el('div', 'sheet-sub', '读取失败：' + e.message));
-        });
-      }
-
-      function render(res){
-        // 后端自动停用横幅
-        if (res.disabled){
-          var warn = el('div', 'notice',
-            '通知已被自动关闭：' + (res.last_error || 'Webhook 连续失败') +
-            '。换个地址后点下面的「恢复通知」。');
-          box.appendChild(warn);
-        } else if (res.fail_streak >= 3){
-          var w2 = el('div', 'notice',
-            '最近连续 ' + res.fail_streak + ' 次推送失败：' + (res.last_error || '') +
-            '。请检查地址是否还有效。');
-          box.appendChild(w2);
-        }
-
-        // 总开关
-        var swRow = el('div', 'chk');
-        var swT = el('div', 'chk-t');
-        swT.appendChild(el('b', '', '启用通知'));
-        swT.appendChild(el('i', '', '关闭后不发送任何推送，签到照常执行'));
-        var sw = el('button', 'sw' + (cfg.enabled ? ' on' : ''));
-        sw.addEventListener('click', function(){
-          cfg.enabled = !cfg.enabled;
-          sw.className = 'sw' + (cfg.enabled ? ' on' : '');
-        });
-        swRow.appendChild(swT); swRow.appendChild(sw);
-        box.appendChild(swRow);
-
-        // 渠道
-        box.appendChild(el('div', 'sect-h', '渠道'));
-        var seg = el('div', 'seg');
-        seg.style.flexWrap = 'wrap';
-        NOTIFY_TYPES.forEach(function(t){
-          var b = el('button', 'seg-item' + (cfg.type === t.id ? ' on' : ''), t.name.split('（')[0]);
-          b.style.flex = '1 0 30%';
-          b.addEventListener('click', function(){
-            cfg.type = t.id;
-            var all = seg.querySelectorAll('.seg-item');
-            for (var i = 0; i < all.length; i++) all[i].classList.remove('on');
-            b.classList.add('on');
-            var picked = null;
-            for (var k = 0; k < NOTIFY_TYPES.length; k++) if (NOTIFY_TYPES[k].id === t.id) picked = NOTIFY_TYPES[k];
-            if (picked) fUrl.input.setAttribute('placeholder', picked.ph);
-          });
-          seg.appendChild(b);
-        });
-        box.appendChild(seg);
-
-        var cur = null;
-        for (var i = 0; i < NOTIFY_TYPES.length; i++) if (NOTIFY_TYPES[i].id === cfg.type) cur = NOTIFY_TYPES[i];
-        var fUrl = mkField('Webhook 地址', 'input', {
-          type: 'text', placeholder: (cur && cur.ph) || '粘贴完整地址',
-          value: cfg.url || ''
-        }, '在群机器人设置里复制「Webhook 地址」整段粘贴进来。');
-        fUrl.input.className = 'mono';
-        box.appendChild(fUrl.wrap);
-
-        // 触发时机
-        box.appendChild(el('div', 'sect-h', '什么时候推'));
-        function toggleRow(key, title, sub){
-          var row = el('div', 'chk');
-          var t = el('div', 'chk-t');
-          t.appendChild(el('b', '', title));
-          t.appendChild(el('i', '', sub));
-          var s = el('button', 'sw' + (cfg[key] ? ' on' : ''));
-          s.addEventListener('click', function(){
-            cfg[key] = !cfg[key];
-            s.className = 'sw' + (cfg[key] ? ' on' : '');
-          });
-          row.appendChild(t); row.appendChild(s);
-          box.appendChild(row);
-        }
-        toggleRow('on_manual', '手动一键签到后', '点底部按钮跑完一轮时推送');
-        toggleRow('on_start', '打开 App 自动签到后', '默认关闭：每次开 App 都推一条会很吵');
-        toggleRow('on_failure', '有账号签到失败时', '失败要第一时间知道，建议保持开启');
-        toggleRow('always', '一条都没签成也推', '全部已签/全部失败时也发一条，用来确认程序确实跑过');
-
-        // 操作
-        var btns = el('div', 'row-btns');
-        var btnSave = el('button', 'btn filled', '保存');
-        var btnTest = el('button', 'btn ghost', '发测试');
-        btnResend = el('button', 'btn ghost', '重发上次结果');
-        btns.appendChild(btnSave); btns.appendChild(btnTest); btns.appendChild(btnResend);
-        box.appendChild(btns);
-
-        var out = el('div', 'sheet-sub', '');
-        out.style.minHeight = '20px';
-        box.appendChild(out);
-
-        if (res.disabled){
-          var btnReset = el('button', 'btn ghost', '恢复通知');
-          btnReset.style.width = '100%';
-          btnReset.addEventListener('click', function(){
-            post('/api/notify/reset', {}).then(function(r){
-              if (!r || r.ok === false){ toast((r && r.error) || '恢复失败'); return; }
-              toast('已恢复'); loadCfg();
-            }).catch(function(e){ toast('恢复失败：' + e.message); });
-          });
-          box.appendChild(btnReset);
-        }
-
-        function payload(){
-          return {
-            enabled: !!cfg.enabled, type: cfg.type || 'wecom',
-            url: fUrl.input.value.trim(),
-            on_success: true, on_failure: !!cfg.on_failure, always: !!cfg.always,
-            on_manual: !!cfg.on_manual, on_start: !!cfg.on_start
-          };
-        }
-
-        btnSave.addEventListener('click', function(){
-          var p = payload();
-          if (p.enabled && !p.url){ out.textContent = '启用通知需要先填 Webhook 地址'; return; }
-          btnSave.disabled = true; out.textContent = '正在保存…';
-          post('/api/notify/config', p).then(function(r){
-            btnSave.disabled = false;
-            if (!r || r.ok === false){ out.textContent = (r && r.error) || '保存失败'; return; }
-            out.textContent = '';
-            toast('已保存');
-          }).catch(function(e){ btnSave.disabled = false; out.textContent = '失败：' + e.message; });
-        });
-
-        btnTest.addEventListener('click', function(){
-          var p = payload();
-          if (!p.url){ out.textContent = '先填 Webhook 地址'; return; }
-          btnTest.disabled = true; out.textContent = '先保存再发送…';
-          post('/api/notify/config', p).then(function(r){
-            if (!r || r.ok === false){ btnTest.disabled = false; out.textContent = (r && r.error) || '保存失败'; return; }
-            out.textContent = '正在发送测试消息…';
-            return post('/api/notify/test', {});
-          }).then(function(r){
-            btnTest.disabled = false;
-            if (!r) return;
-            if (r.ok === false){ out.textContent = '发送失败：' + (r.error || '未知错误'); return; }
-            out.textContent = '测试消息已发出，看看群里收到没有。';
-          }).catch(function(e){ btnTest.disabled = false; out.textContent = '发送失败：' + e.message; });
-        });
-
-        // 「重发上次结果」
-        //
-        // 加这个按钮的原因：推送只有一个触发点是「一轮签到结束」，而那一轮到底
-        // 走没走、被哪个开关挡了，用户完全看不到。有了它，任何时刻都能拿最近一次
-        // 的明细（lastLines）原样再发一条：能发出去 = 配置和网络都没问题；
-        // 发不出去 = 错误就在这一下里，配合下面的运行日志一眼定位。
-        // force=true，绕过所有开关——这是手动动作，不是自动推送。
-        if (btnResend){
-          btnResend.addEventListener('click', function(){
-            if (!lastLines.length){
-              out.textContent = '还没有可重发的记录：先回主页跑一次签到。';
-              return;
-            }
-            btnResend.disabled = true; out.textContent = '正在重发上次结果…';
-            post('/api/notify', {
-              trigger: 'manual', accounts: lastLines, summary: lastSummary,
-              tz_offset: new Date().getTimezoneOffset(), force: true
-            }).then(function(r){
-              btnResend.disabled = false;
-              if (!r || r.ok === false){ out.textContent = '重发失败：' + ((r && r.error) || '未知错误'); return; }
-              if (r.sent === false){ out.textContent = '重发未送达：' + (r.error || '未知原因'); return; }
-              out.textContent = '已重发（' + lastLines.length + ' 个账号），看看收到没有。';
-            }).catch(function(e){ btnResend.disabled = false; out.textContent = '重发失败：' + e.message; });
-          });
-        }
-      }
-
-      loadCfg();
-    });
-  }
 
   /* ---------- 卡片右上角 ···：已删除（0.6.4） ----------
      0.6.5：连账号详情也删了。用户的原话是「点进详情之后我就返不回去了，
@@ -3700,6 +3471,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 打开 App 只跑这一处判定：今天跑过就只刷新 + 提示，没跑过才走完整流程。
   // 这条路径是「自动签到」的唯一入口，壳层不再单独注入签到。
   bootCheck();
+  // 0.6.7： meta 原由「设置」页填充，设置页精简后移到这里统一取一次，
+  // 保证「日志 → 导出」头部的版本号不退化成「版本 —」。
+  j('/api/meta').then(function(m){ state.meta = m || null; }).catch(function(){});
   // 壳层在 WorkBuddy 登录后会 reload 本页，内存变量清零：
   // 从 localStorage 认出「上次是去登录 WorkBuddy」，把换取 token 的流程续上。
   (function(){

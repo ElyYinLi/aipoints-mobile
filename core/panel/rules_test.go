@@ -487,28 +487,28 @@ func TestNotifySkipsWhenDisabled(t *testing.T) {
 	}
 }
 
-// 启动签到默认不推送，避免一天开几次 App 收几条。
-func TestNotifySkipsStartTriggerByDefault(t *testing.T) {
-	var hit bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = true
-	}))
-	defer srv.Close()
-	n := newNotifier("")
-	_ = n.save(NotifyConfig{Enabled: true, Type: "wecom", URL: srv.URL, OnManual: true, OnSuccess: true})
-	err := n.send(context.Background(), NotifyPayload{Trigger: "start"}, false)
-	if !isSkip(err) {
-		t.Fatalf("启动签到应被跳过: %v", err)
-	}
-	if hit {
-		t.Fatal("on_start 默认关闭，启动签到不应推送")
-	}
-	// 手动触发则应该发
-	if err := n.send(context.Background(), NotifyPayload{Trigger: "manual"}, false); err != nil {
-		t.Fatal(err)
-	}
-	if !hit {
-		t.Fatal("on_manual 开启时手动签到应推送")
+// 0.6.7：「什么时候推」四个开关全删，固定为「启用即推」。
+// 无论触发源是启动签到还是手动签到，只要通知启用了就必须推——
+// 存量配置里残留的 OnStart:false / Always:false 一律不参与判断。
+func TestNotifyPushesEveryTriggerWhenEnabled(t *testing.T) {
+	for _, trig := range []string{"start", "manual", "single"} {
+		t.Run(trig, func(t *testing.T) {
+			var hit bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hit = true
+			}))
+			defer srv.Close()
+			n := newNotifier("")
+			// 故意塞旧配置的 false 值，验证 save() 会强制归一化成恒开
+			_ = n.save(NotifyConfig{Enabled: true, Type: "wecom", URL: srv.URL,
+				OnStart: false, OnManual: false, Always: false, OnSuccess: false, OnFailure: false})
+			if err := n.send(context.Background(), NotifyPayload{Trigger: trig}, false); err != nil {
+				t.Fatalf("触发源 %q 启用后应推送，得到: %v", trig, err)
+			}
+			if !hit {
+				t.Fatalf("触发源 %q 启用后没有真的发出请求", trig)
+			}
+		})
 	}
 }
 
@@ -584,19 +584,20 @@ func TestHandleNotifyNeverFailsSignin(t *testing.T) {
 	}
 }
 
-// 被配置过滤掉的一轮必须报 skipped，不能报 sent。
+// handleNotify 的 sent/skipped 语义（0.6.7）：
+//   - 通知启用 → 任何触发源都真的发，回 sent:true；
+//   - 通知未启用 → 回 ok:true + skipped:true，不算故障、不累计 fail_streak。
 //
-// 这条踩过：handleNotify 原先只判断 err == nil 就回 sent:true，
-// 于是 on_start=false 挡下来的启动签到也显示「已发送」，用户以为收到过。
 // 跳过与失败是两件事：跳过是用户自己关的，不该累计 fail_streak。
-func TestHandleNotifyReportsSkippedNotSent(t *testing.T) {
+func TestHandleNotifyReportsSentAndSkipped(t *testing.T) {
 	var hit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hit = true
 	}))
 	defer srv.Close()
 	s := New(Options{Store: fakeStore{}, Reg: provider.NewRegistry(httpx.New()), DataDir: t.TempDir()})
-	// on_start 关闭：启动触发应被跳过
+	// 0.6.7：即使塞入旧配置的 OnStart:false，save() 也会归一化成恒开，
+	// 启动触发照样要发——「删了开关却收不到推送」正是要避免的坑。
 	_ = s.notify.save(NotifyConfig{Enabled: true, Type: "wecom", URL: srv.URL,
 		OnManual: true, OnSuccess: true, OnStart: false})
 	mux := http.NewServeMux()
@@ -604,26 +605,40 @@ func TestHandleNotifyReportsSkippedNotSent(t *testing.T) {
 	psrv := httptest.NewServer(mux)
 	defer psrv.Close()
 
-	body := strings.NewReader(`{"trigger":"start","accounts":[{"provider":"aipy","label":"x","status":"ok","message":"ok"}],"summary":"s"}`)
-	resp, err := http.Post(psrv.URL+"/api/notify", "application/json", body)
-	if err != nil {
-		t.Fatal(err)
+	post := func(body string) map[string]any {
+		resp, err := http.Post(psrv.URL+"/api/notify", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
 	}
-	defer resp.Body.Close()
-	var out map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&out)
 
+	// ① 启用后，启动轮应真的发出去
+	out := post(`{"trigger":"start","accounts":[{"provider":"aipy","label":"x","status":"ok","message":"ok"}],"summary":"s"}`)
+	if ok, _ := out["ok"].(bool); !ok {
+		t.Fatalf("回包应 ok=true: %v", out)
+	}
+	if sent, _ := out["sent"].(bool); !sent {
+		t.Fatalf("启用后启动轮应报已发送: %v", out)
+	}
+	if !hit {
+		t.Fatal("启用后启动轮没有真的发请求")
+	}
+
+	// ② 未启用时应报 skipped，且不累计失败
+	_ = s.notify.save(NotifyConfig{Enabled: false, Type: "wecom", URL: srv.URL})
+	out = post(`{"trigger":"start","accounts":[],"summary":"s"}`)
 	if ok, _ := out["ok"].(bool); !ok {
 		t.Fatalf("跳过也要回 ok=true（推送永不影响签到）: %v", out)
 	}
 	if sent, _ := out["sent"].(bool); sent {
-		t.Fatalf("被过滤的一轮不能报已发送: %v", out)
+		t.Fatalf("未启用时不能报已发送: %v", out)
 	}
 	if skipped, _ := out["skipped"].(bool); !skipped {
 		t.Fatalf("应标记 skipped 以示「用户自己关的」: %v", out)
-	}
-	if hit {
-		t.Fatal("on_start 关闭时不应真的发请求")
 	}
 	if fs := s.notify.status()["fail_streak"].(int); fs != 0 {
 		t.Fatalf("跳过不能累计失败次数，实际 %d", fs)
@@ -892,7 +907,8 @@ func TestNotifySkipIsLogged(t *testing.T) {
 	defer httpx.ClearLogs()
 
 	n := newNotifier("")
-	if err := n.save(NotifyConfig{Enabled: true, Type: "wecom", URL: "http://127.0.0.1:1/hook", OnStart: false}); err != nil {
+	// 0.6.7：触发开关已删，跳过只能由「通知未启用」造成（不再是 on_start=false）。
+	if err := n.save(NotifyConfig{Enabled: false, Type: "wecom", URL: "http://127.0.0.1:1/hook"}); err != nil {
 		t.Fatal(err)
 	}
 	p := NotifyPayload{
@@ -901,7 +917,7 @@ func TestNotifySkipIsLogged(t *testing.T) {
 	}
 	err := n.send(context.Background(), p, false)
 	if err == nil || !isSkip(err) {
-		t.Fatalf("启动签到默认不推，应返回 skip: %v", err)
+		t.Fatalf("通知未启用应返回 skip: %v", err)
 	}
 	logs := httpx.Logs(0)
 	var found bool
