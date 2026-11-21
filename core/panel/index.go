@@ -555,7 +555,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .acc-row.off .dot,.acc-row.off .acc-info{opacity:.5}
 .acc-acts{display:flex;gap:5px;flex:0 0 auto}
 .a-btn{
-  border:0;border-radius:9px;padding:7px 9px;line-height:1;
+  border:0;border-radius:9px;padding:9px 10px;line-height:1;
   font-size:11.5px;font-weight:650;letter-spacing:.01em;
   background:var(--surface-3);color:var(--on-surface);
   transition:transform .12s,background .16s;
