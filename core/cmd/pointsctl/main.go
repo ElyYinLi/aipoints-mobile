@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
+	"github.com/ElyYinLi/aipoints-mobile/core/mobile"
 	"github.com/ElyYinLi/aipoints-mobile/core/panel"
 	"github.com/ElyYinLi/aipoints-mobile/core/provider"
 	"github.com/ElyYinLi/aipoints-mobile/core/store"
@@ -57,7 +58,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "初始化存储失败:", err)
 			os.Exit(1)
 		}
-		srv := panel.New(panel.Options{Addr: *addr, Store: st, Reg: reg, DataDir: *dataDir})
+		// Version 留空会让设置页显示「版本 —」，调试时看不出跑的是哪一版
+		srv := panel.New(panel.Options{Addr: *addr, Store: st, Reg: reg, DataDir: *dataDir, Version: mobile.Version})
 		if err := srv.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,6 +51,9 @@ type Server struct {
 	// tasks 记住「今天已经成功领过哪些任务奖励」，用于阻断重复申领。
 	// 上游 status 会滞后，只靠它挡不住（见 task_memo.go）。
 	tasks *taskMemo
+	// daily 记住「今天这一轮一键签到跑过没有」，是 0.6.4 启动判定的唯一依据。
+	// 用户要求：今天跑过就只刷新 + 提示，绝不再自动签一遍（容易黑号）。
+	daily *dailyMemo
 	// busy 记录正在写上游的账号键 "provider|account"。
 	// 用户连点两下「一键签到」会起两个 goroutine 同时打上游，
 	// 这正是「请求太多容易黑号」的直接来源，必须串行化。
@@ -72,9 +76,11 @@ func New(opt Options) *Server {
 		s.gains = newGainMemo(opt.DataDir)
 		s.tasks = newTaskMemo(opt.DataDir)
 		s.notify = newNotifier(opt.DataDir)
+		s.daily = newDailyMemo(opt.DataDir)
 	} else {
 		s.tasks = newTaskMemo("")
 		s.notify = newNotifier("")
+		s.daily = newDailyMemo("")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -82,6 +88,10 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/query", s.handleQuery)
 	mux.HandleFunc("/api/checkin", s.handleCheckin)
+	// 今日是否已跑过一轮：前端启动时先问这一句再决定「只刷新」还是「走完整流程」。
+	// 用户原话：「探测今天是否有签到日志，有就只刷新数据并提示哪几个没签」。
+	mux.HandleFunc("/api/daily", s.handleDaily)
+	mux.HandleFunc("/api/daily/mark", s.handleDailyMark)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/claim", s.handleTaskClaim)
 	mux.HandleFunc("/api/tasks/claim_all", s.handleTaskClaimAll)
@@ -109,6 +119,8 @@ func New(opt Options) *Server {
 	// 也能一键复制发给开发者定位。日志在写入侧已脱敏，不含凭据。
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/logs/clear", s.handleLogsClear)
+	// 前端日志入口：让「今天该不该签、判定成什么」这类页面侧决策也进同一条时间线
+	mux.HandleFunc("/api/log", s.handleLog)
 	// 账号管理与备份：手动导入凭据、删除、启停、试连、导出/导入。
 	// 这几条通路完全不依赖平台网页登录，是「添加账号」的可靠兜底。
 	mux.HandleFunc("/api/account/add", s.handleAccountAdd)
@@ -237,6 +249,7 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 
 // handleQuery 并发查询全部启用账号。
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	list, err := s.opt.Store.List()
 	if err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
@@ -327,7 +340,69 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 「读取账号状态」是每一轮的第一步：用户排查「签到没动静」时需要看到
+	// 这一步确实跑了、跑了多久、几个账号成功。成功也要记（0.6.4）。
+	okN, badN := 0, 0
+	for i := range out {
+		if out[i].Error != "" {
+			badN++
+		} else {
+			okN++
+		}
+	}
+	httpx.AddLog(httpx.LogEntry{
+		Level: logLevelIf(badN > 0), Scope: "query",
+		CostMS: time.Since(start).Milliseconds(),
+		Msg:    fmt.Sprintf("读取账号状态：%d 个成功，%d 个异常", okN, badN),
+	})
 	writeJSON(w, out)
+}
+
+// logLevelIf 返回 info 或 warn：有异常就算 warn，让「只看异常」也能看到它。
+func logLevelIf(bad bool) string {
+	if bad {
+		return "warn"
+	}
+	return "info"
+}
+
+// acctLabel 是日志里对某个账号的称呼：「平台 · 备注」。
+//
+// 不带 account_id：日志要贴给别人看，id 一长串既占宽度又泄露信息；
+// 备注为空时退回平台名，够定位是哪一条执行记录。
+func (s *Server) acctLabel(a store.Account) string {
+	name := a.Provider
+	if p, ok := s.opt.Reg.Get(a.Provider); ok && p.Meta().Name != "" {
+		name = p.Meta().Name
+	}
+	if a.Label != "" && a.Label != a.Provider {
+		return name + " · " + a.Label
+	}
+	return name
+}
+
+// checkinLogMsg 把签到结果压成一句人话，用于日志正文。
+func checkinLogMsg(res provider.Result) string {
+	switch {
+	case res.Error != "":
+		return "失败：" + res.Error
+	case res.Already:
+		return "今日已签，无需重复提交" + gainLogTail(res)
+	case res.OK:
+		return "签到成功" + gainLogTail(res)
+	}
+	return "未成功（平台未返回明确结果）"
+}
+
+func gainLogTail(res provider.Result) string {
+	if res.Gain <= 0 {
+		return ""
+	}
+	unit := res.Unit
+	if unit == "" {
+		unit = "积分"
+	}
+	return "，本次 +" + strconv.FormatFloat(res.Gain, 'f', -1, 64) + " " + unit
 }
 
 // handleCheckin 串行签到（同设备并发最容易被风控）。
@@ -347,13 +422,22 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	// 每轮签到都留一条痕迹。
 	//
 	// 用户报「我没点刷新，它自己又跑了一轮」——有这条日志就能直接对上是
-	// 「冷启动自动签到」还是「手动触发」，不用靠猜。target 为空即整轮一键签到。
+	// 「打开 App 自动签到」还是「手动触发」，不用靠猜。target 为空即整轮一键签到。
 	target0 := r.URL.Query().Get("account")
+	// 整轮签到才设置轮次 id：单账号签到与整轮可能并发，混进同一轮会误导。
+	// 轮次在这里设置后，本 goroutine 里后续所有日志（含 provider 内部）自动带上它。
+	var roundID string
+	if target0 == "" {
+		roundID = NewRoundID()
+		restore := httpx.SetRound(roundID)
+		defer restore()
+	}
 	httpx.AddLog(httpx.LogEntry{
-		Level: "info", Scope: "checkin",
+		Level: "info", Scope: "checkin", Round: roundID,
+		Step: map[bool]string{true: "单账号签到", false: "一键签到"}[target0 != ""],
 		Msg: map[bool]string{
 			true:  "开始单账号签到：" + target0,
-			false: "开始一键签到（整轮）",
+			false: "开始一键签到（整轮，轮次 " + roundID + "）",
 		}[target0 != ""],
 	})
 	target := target0
@@ -376,6 +460,10 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 		key := a.Provider + "|" + a.AccountID
 		if !s.acquire(key) {
+			httpx.AddLog(httpx.LogEntry{
+				Level: "warn", Scope: a.Provider, Step: "签到 " + s.acctLabel(a),
+				Msg: "该账号正在签到中，本次跳过（防重复请求）",
+			})
 			out = append(out, provider.Result{
 				Provider: a.Provider, AccountID: a.AccountID,
 				Message: "该账号正在签到中，已跳过",
@@ -388,6 +476,10 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 		// 只有真的发过写请求才需要间隔（防同设备批量写触发风控）。
 		// 登录失效 / 网络不通这类账号根本没写入，白等一秒多只会让「一键签到」显得卡。
 		if wroteRemote(res) {
+			httpx.AddLog(httpx.LogEntry{
+				Level: "info", Scope: a.Provider, Step: "节流",
+				Msg: "等待 1.2s 再处理下一个账号（防同设备连续写触发风控）",
+			})
 			time.Sleep(1200 * time.Millisecond)
 		}
 	}
@@ -404,6 +496,10 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) checkinOne(ctx context.Context, p provider.Provider, a store.Account, cred provider.Credential) provider.Result {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	// 每一步都留痕：用户要的是「能看出执行逻辑」的日志，而不是只看结果。
+	// step 里的名字用用户看得懂的平台名 + 账号备注，和界面上的称呼一致。
+	step := "签到 " + s.acctLabel(a)
+	begin := time.Now()
 	res, cerr := p.Checkin(ctx, cred)
 	if cerr != nil {
 		res.Error = cerr.Error()
@@ -415,10 +511,22 @@ func (s *Server) checkinOne(ctx context.Context, p provider.Provider, a store.Ac
 	if res.Provider == "" {
 		res.Provider = a.Provider
 	}
+	httpx.AddLog(httpx.LogEntry{
+		Level: logLevelIf(res.Error != ""), Scope: a.Provider, Step: step,
+		CostMS: time.Since(begin).Milliseconds(),
+		Msg:    checkinLogMsg(res),
+	})
 	// 只有「真的提交了写请求且声称成功」才值得回查。
 	// 已签 / 失败 / 风控都需要查——那三种查了也是白花一次请求。
 	if res.OK && !res.Already && res.Error == "" {
-		if !s.confirmCheckin(ctx, p, cred) {
+		vbegin := time.Now()
+		confirmed := s.confirmCheckin(ctx, p, cred)
+		httpx.AddLog(httpx.LogEntry{
+			Level: logLevelIf(!confirmed), Scope: a.Provider, Step: step + " · 二次核对",
+			CostMS: time.Since(vbegin).Milliseconds(),
+			Msg:    map[bool]string{true: "平台已显示今日已签", false: "平台仍显示未签，判定为未到账"}[confirmed],
+		})
+		if !confirmed {
 			res.OK = false
 			res.Kind = provider.ErrUnknown
 			res.Message = "签到请求已提交，但未能确认到账，请稍后下拉刷新核对"

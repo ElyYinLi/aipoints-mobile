@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -36,22 +37,36 @@ def token() -> str:
     return t
 
 
+# 400 是 GitHub 侧的偶发（同一份内容重发就成功），实测偶尔连续命中几个不同文件。
+# 500/502/503 同理。这些都重试；401/403/404/422 是确定性错误，直接报出来。
+RETRY_CODES = {400, 500, 502, 503, 504}
+RETRY_TIMES = 4
+
+
 def call(method: str, path: str, payload: dict | None = None) -> dict:
     url = path if path.startswith("https://") else API + path
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token()}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    if data:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            body = r.read().decode()
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode()[:400]
-        sys.exit(f"{method} {url} -> {e.code}: {detail}")
+    last = ""
+    for attempt in range(RETRY_TIMES):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token()}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        if data:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                body = r.read().decode()
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode()[:400]
+            last = f"{method} {url} -> {e.code}: {detail}"
+            if e.code not in RETRY_CODES:
+                sys.exit(last)
+        except (urllib.error.URLError, TimeoutError) as e:
+            last = f"{method} {url} -> 网络错误: {e}"
+        time.sleep(1.5 * (attempt + 1))
+    sys.exit(f"重试 {RETRY_TIMES} 次仍失败：{last}")
 
 
 def blob_sha(data: bytes) -> str:

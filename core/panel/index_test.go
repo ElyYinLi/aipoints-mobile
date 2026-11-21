@@ -77,18 +77,31 @@ func TestIndexCheckinShowsProgress(t *testing.T) {
 	}
 }
 
-// iOS/Android 后台久了会被系统回收 WebView 渲染进程，回来时页面是死的。
-// 必须「整页重建」，光调 JS 没用。这条逻辑同时存在于页面侧（限流 reload）。
-func TestIndexReloadGuardExists(t *testing.T) {
+// 0.6.4：页面侧的「整页 reload 兜底」已按用户要求全部删除。
+//
+// 用户原话：「后台久了回前台『读取失败』这个问题你现有的措施全部删掉……
+// 都没卵用……实质上什么都没改变」「删掉这些措施，我不想说第三遍」。
+//
+// 真因是 Go 侧复用了系统已回收的 keep-alive 连接，已在 httpx.New 里
+// 改成 DisableKeepAlives（有单测钉住）。页面侧因此不该再有任何
+// reload/重建/自动重试的逻辑——那只会把一个错误变成两个错误。
+func TestIndexNoReloadFallback(t *testing.T) {
 	src := indexHTML
-	for _, want := range []string{
+	for _, dead := range []string{
 		"function reloadThrottled()",
-		"var RELOAD_KEY = 'last_reload_at';",
-		"if (now - last < 60000) return false;",
+		"RELOAD_KEY",
+		"reloadFromBlank",       // 页面不得自己重建
+		"notifyReload",          // 页面不得通知壳层重建
+		"BOOT_FRESH_MS",         // 「刚启动就失败 = 页面残废」的判定已删
+		"Promise.all([j('/api/query'), j('/api/accounts')])", // 改 allSettled
 	} {
-		if !strings.Contains(src, want) {
-			t.Fatalf("重载限流缺少 %q", want)
+		if strings.Contains(src, dead) {
+			t.Fatalf("页面仍残留自动重建/自动兜底逻辑：%q", dead)
 		}
+	}
+	// 前端 fetch 不得再对网络层失败自动重试（用户要求删掉这类措施）
+	if strings.Contains(src, "tries < 1 && (e instanceof TypeError") {
+		t.Fatal("j() 仍在自动重试，应当直接失败交给用户点重试")
 	}
 }
 
@@ -120,8 +133,8 @@ func TestIndexBootRunsFullCheckinFlow(t *testing.T) {
 		}
 	}
 
-	// 启动就走同一个 checkinAll，不能另写一条只签到的捷径
-	if !strings.Contains(src, "autoTask = checkinAll({ quiet: true })") {
+	// 启动判定为「今天没跑过」时必须复用同一个 checkinAll，不能另写捷径
+	if !strings.Contains(src, "return checkinAll({ quiet: true });") {
 		t.Fatal("打开 App 没有复用 checkinAll，会与点按钮的行为不一致")
 	}
 }
@@ -133,6 +146,13 @@ func TestIndexResumeDoesNotCheckin(t *testing.T) {
 
 	if !strings.Contains(src, "function refreshOnResume(){") {
 		t.Fatal("缺少 refreshOnResume()：回前台应只刷新不签到")
+	}
+	// 回前台的整个函数体里不能出现写请求，也不能再有重建页面的兜底
+	rs := strings.Index(src, "function refreshOnResume(){")
+	re := strings.Index(src[rs:], "\n  }")
+	if body := src[rs : rs+re]; strings.Contains(body, "checkinAll") ||
+		strings.Contains(body, "reload") || strings.Contains(body, "markDaily") {
+		t.Fatalf("回前台逻辑被塞进了签到/重建动作：%s", body)
 	}
 	// 回前台路径里不能出现 POST 签到/领奖的调用
 	start := strings.Index(src, "function refreshOnResume(){")
@@ -150,8 +170,8 @@ func TestIndexResumeDoesNotCheckin(t *testing.T) {
 	if !strings.Contains(src, "resumeAfterLogin(); refreshOnResume();") {
 		t.Fatal("visibilitychange/pageshow 未接到 refreshOnResume")
 	}
-	// 壳层入口只有两个明确的语义
-	for _, want := range []string{"window.__pointsAutoCheckin = bootAuto;", "window.__pointsRefresh = refreshOnResume;"} {
+	// 壳层入口只有两个明确的语义：打开即判定，回前台只刷新
+	for _, want := range []string{"window.__pointsAutoCheckin = bootCheck;", "window.__pointsRefresh = refreshOnResume;"} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("缺少壳层入口 %q", want)
 		}
@@ -191,9 +211,55 @@ func TestIndexHelpIsConcise(t *testing.T) {
 	if n := strings.Count(body, "para('"); n > 3 {
 		t.Fatalf("签到说明有 %d 段，用户要求精简到三条", n)
 	}
-	for _, want := range []string{"打开 App 自动签一次", "切后台回来不会签", "只处理「未签」的账号"} {
+	// 0.6.4 起文案改成「一天只自动签一次」：打开 App 先查今日记录，
+	// 跑过就不签。旧文案「打开 App 自动签一次」已与实际行为不符。
+	for _, want := range []string{"一天只自动签一次", "切后台回来什么都不会签", "只处理「未签」的账号", "今天有没有跑过"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("说明缺少关键结论 %q", want)
 		}
+	}
+}
+
+// 设置页必须是四个分页签：通知 / 账号 / 数据 / 日志。
+// 用户原话：「通知/账号/数据/日志这四个吧，外观直接删除，
+//            主界面本来就有按钮了，设置里不再体现外观的设置。」
+func TestSettingsHasFourTabs(t *testing.T) {
+	src := indexHTML
+	for _, want := range []string{
+		"{ id: 'notify', name: '通知' }",
+		"{ id: 'account', name: '账号' }",
+		"{ id: 'data', name: '数据' }",
+		"{ id: 'log', name: '日志' }",
+		"BUILDERS = { notify: buildNotifyTab, account: buildAccountTab, data: buildDataTab, log: buildLogTab }",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("设置页缺少 %q", want)
+		}
+	}
+	// 外观分区必须从设置页消失（主题按钮在主界面）
+	start := strings.Index(src, "function openSettings(){")
+	end := strings.Index(src[start:], "// ---------- 通知 Tab ----------")
+	body := src[start : start+end]
+	if strings.Contains(body, "'外观'") || strings.Contains(body, "THEMES.forEach") {
+		t.Fatal("设置页仍在渲染外观（主题）分区，用户要求删除")
+	}
+}
+
+// 「···」全删：卡片右上角和紧凑行里都不许再出现。
+// 用户原话：「这个玩意不要给我保留了，占地方」「卡片不用显示···」。
+func TestNoMoreDotsEntry(t *testing.T) {
+	src := indexHTML
+	for _, dead := range []string{
+		"c-more",             // 按钮类名
+		"openAccountMenu",    // 旧菜单函数
+		"ICON('more')",       // 三点图标
+	} {
+		if strings.Contains(src, dead) {
+			t.Fatalf("残留「···」入口：%q", dead)
+		}
+	}
+	// 账号详情必须还在（入口挪到了设置 → 账号）
+	if !strings.Contains(src, "function openAccountDetail(") {
+		t.Fatal("账号详情被误删：令牌/停用/删除需要一个入口")
 	}
 }

@@ -3,9 +3,11 @@ package panel
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ElyYinLi/aipoints-mobile/core/httpx"
 	"github.com/ElyYinLi/aipoints-mobile/core/provider"
 	"github.com/ElyYinLi/aipoints-mobile/core/store"
 )
@@ -175,8 +177,13 @@ func (s *Server) handleLotteryDrawAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		row := drawRow{Provider: a.Provider, AccountID: a.AccountID}
+		step := "抽奖 " + s.acctLabel(a)
 		if st.Remaining <= 0 {
-			// 没有次数就静默跳过（不算错误，用户不需要看到）
+			// 没有次数就静默跳过（不算错误，用户不需要看到）。
+			// 但日志要留一行，否则「这轮到底抽没抽」看不出来。
+			httpx.AddLog(httpx.LogEntry{
+				Level: "info", Scope: a.Provider, Step: step, Msg: "没有抽奖次数，跳过",
+			})
 			continue
 		}
 		// 上限保护：上游异常返回超大次数时不要死循环打爆接口
@@ -184,6 +191,10 @@ func (s *Server) handleLotteryDrawAll(w http.ResponseWriter, r *http.Request) {
 		if times > 10 {
 			times = 10
 		}
+		httpx.AddLog(httpx.LogEntry{
+			Level: "info", Scope: a.Provider, Step: step,
+			Msg: "剩余 " + strconv.Itoa(st.Remaining) + " 次，开始抽取",
+		})
 		var errs []string
 		for i := 0; i < times; i++ {
 			dctx, dcancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -201,7 +212,16 @@ func (s *Server) handleLotteryDrawAll(w http.ResponseWriter, r *http.Request) {
 				if res.Prize != "" {
 					row.Prizes = append(row.Prizes, res.Prize)
 				}
+				httpx.AddLog(httpx.LogEntry{
+					Level: "info", Scope: a.Provider, Step: step,
+					Msg: "第 " + strconv.Itoa(i+1) + " 次抽中：" +
+						orDefault(res.Prize, "未知奖品") + gainLogTail(provider.Result{Gain: res.Gain, Unit: res.Unit}),
+				})
 			} else {
+				httpx.AddLog(httpx.LogEntry{
+					Level: "warn", Scope: a.Provider, Step: step,
+					Msg: "第 " + strconv.Itoa(i+1) + " 次抽取失败：" + orDefault(res.Error, "平台未返回原因"),
+				})
 				if res.Error != "" {
 					errs = append(errs, res.Error)
 				}

@@ -26,9 +26,6 @@ final class Engine: ObservableObject {
         guard !started else { return }
         started = true
 
-        // 后台任务必须早于 didFinishLaunching 结束前注册
-        BackgroundRefresh.register()
-
         // 引擎跑在 Go 的 goroutine 里，起服务、读写账号都会短暂阻塞。
         // 放到后台队列，避免首帧卡在 MobileStart 上（表现为「启动就卡住」）。
         let dir = FileManager.default

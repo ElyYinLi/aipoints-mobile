@@ -370,7 +370,7 @@ func (n *notifier) send(ctx context.Context, p NotifyPayload, force bool) error 
 	// 成功也要留一条：否则「这次到底推没推」在日志里永远是空白，
 	// 用户只能靠手机上有没有收到去反推。
 	httpx.AddLog(httpx.LogEntry{
-		Level: "info", Scope: "notify",
+		Level: "info", Scope: "notify", Step: "推送",
 		Msg: fmt.Sprintf("推送成功（%s · %d 个账号）", triggerName(p.Trigger), len(p.Accounts)),
 	})
 	return nil
@@ -400,7 +400,7 @@ func errSkipf(reason string) error { return &skipError{reason: reason} }
 // （发了 / 跳过了 / 失败）都必须能在设置页的日志里看到，否则只能靠猜。
 func (n *notifier) skip(p NotifyPayload, reason string) error {
 	httpx.AddLog(httpx.LogEntry{
-		Level: "info", Scope: "notify",
+		Level: "info", Scope: "notify", Step: "推送",
 		Msg: fmt.Sprintf("跳过推送（%s）：%s", triggerName(p.Trigger), reason),
 	})
 	return errSkipf(reason)
@@ -431,7 +431,7 @@ func (n *notifier) noteFailure(msg string) error {
 	n.failStreak++
 	n.lastErr = msg
 	n.mu.Unlock()
-	httpx.AddLog(httpx.LogEntry{Level: "error", Scope: "notify", Msg: "推送失败：" + msg})
+	httpx.AddLog(httpx.LogEntry{Level: "error", Scope: "notify", Step: "推送", Msg: "推送失败：" + msg})
 	return fmt.Errorf("%s", msg)
 }
 

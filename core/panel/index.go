@@ -472,27 +472,22 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;
 }
 .logrow{
-  display:flex;gap:8px;align-items:baseline;padding:7px 12px;
-  font-family:var(--mono);font-size:11.5px;line-height:1.5;
+  display:flex;gap:7px;align-items:baseline;padding:6px 11px;
+  font-family:var(--mono);font-size:11.5px;line-height:1.45;
   border-left:3px solid transparent;
 }
 .logrow+.logrow{border-top:1px solid var(--hair)}
-.logrow .lt{color:var(--on-surface-v);flex:none;font-variant-numeric:tabular-nums}
-.logrow .lm{flex:1;min-width:0;word-break:break-all;color:var(--on-surface)}
-.logrow .lm b{font-weight:650}
+/* 时间固定宽度：现在带毫秒（HH:MM:SS.mmm），不定宽会让每行的正文起点参差 */
+.logrow .lt{color:var(--on-surface-v);flex:0 0 82px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.logrow .lm{flex:1;min-width:0;word-break:break-word;color:var(--on-surface)}
+/* 步骤名不折行：一个步骤一条记录，折成两行会把一屏能看的条数砍掉一半 */
+.logrow .lm b{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .logrow .lc{flex:none;color:var(--on-surface-v);font-variant-numeric:tabular-nums}
 .logrow.warn{border-left-color:var(--warn);background:var(--warn-c)}
 .logrow.error{border-left-color:var(--bad);background:var(--bad-c)}
 .logrow.error .lm{color:var(--bad)}
 .logempty{padding:18px 12px;text-align:center;color:var(--on-surface-v);font-size:12.5px}
 .logrow .sub{color:var(--on-surface-v);font-size:11px}
-/* 卡片右上角的管理入口 */
-.c-more{
-  border:0;background:transparent;color:var(--on-surface-v);
-  width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;
-}
-.c-more:active{background:var(--surface-2)}
-.c-more svg{width:18px;height:18px}
 
 /* 分段控件（主题三选一） */
 .seg{
@@ -506,6 +501,39 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 }
 .seg-item.on{background:var(--card);color:var(--on-surface);box-shadow:var(--shadow)}
 .seg-item:active{transform:scale(.97)}
+
+/* ---- 设置页分页签（0.6.4） ----
+   四个页签横向等分，切页时下方内容整体替换。没有二级弹层：
+   用户抱怨过「设置里点进去又弹一层，还得再退回来」，这里一页到底。 */
+.tab-pane{padding-top:2px}
+/* 把若干开关收进一张卡，省掉四个 sect-h 带来的空白 */
+.sect-card{
+  background:var(--surface-1);border-radius:var(--r-lg);
+  padding:4px 12px;margin-bottom:6px;
+}
+.sect-card .chk{background:transparent;border-radius:0;padding:10px 0}
+.sect-card .chk+.chk{border-top:1px solid var(--hair)}
+/* 账号 Tab 的行：头像 + 两行文字 + 箭头，整行可点 */
+.nav-row{
+  display:flex;align-items:center;gap:11px;width:100%;
+  border:0;background:var(--surface-1);border-radius:var(--r-lg);
+  padding:11px 13px;margin-bottom:8px;text-align:left;color:var(--on-surface);
+  transition:transform .14s,background .14s;
+}
+.nav-row:active{transform:scale(.985);background:var(--surface-3)}
+.nav-row.off{opacity:.55}
+.nav-row .dot{
+  width:34px;height:34px;border-radius:11px;flex:0 0 auto;
+  display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px;
+}
+.acc-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.acc-info b{font-size:14.5px;font-weight:640;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-info i{font-style:normal;font-size:12px;color:var(--on-surface-v);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-ic{color:var(--on-surface-v);display:grid;place-items:center;flex:0 0 auto}
+.nav-ic svg{width:19px;height:19px}
+.nav-go{color:var(--on-surface-v);flex:0 0 auto;display:grid;place-items:center}
+.nav-go svg{width:18px;height:18px}
 
 /* ---- 令牌列表（0.6.0） ----
    一条令牌 = 名称 + 完整 key + 额度；操作排在卡片底部一行。
@@ -651,7 +679,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 (function(){
   "use strict";
   var $ = function(id){ return document.getElementById(id); };
-  var state = { rows: [], busy: false, providers: [] };
+  var state = { rows: [], busy: false, providers: [], meta: null };
 
   /* ---------- 工具 ---------- */
   function fmt(n){
@@ -690,29 +718,25 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   function j(u, o){
     // 带超时的 fetch：弱网/平台接口挂住时不让骨架屏无限转，超时给出可操作的提示。
     // 引擎侧每个账号 20s 超时且并行，这里留 25s 余量。
-    // 关键：iOS 进入后台后，本机回环连接的 socket 可能被系统挂起/复用失效，
-    // 回到前台第一次 fetch 会直接失败。这里对「网络层失败」自动重试一次，
-    // 第二次往往能拿到新连接，避免「读取失败 + 下拉刷新也救不回来」的死局。
-    var attempt = function(tries){
-      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      var opt = o || {};
-      var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
-      if (ctrl) opt.signal = ctrl.signal;
-      return fetch(u, opt).then(function(r){
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      }).catch(function(e){
-        if (e && e.name === 'AbortError') throw new Error('请求超时，请检查网络后下拉刷新');
-        if (tries < 1 && (e instanceof TypeError || /fetch|network|failed/i.test(String(e.message)))){
-          // 连接层失败（不是业务错误/超时）：稍等片刻重试一次
-          return new Promise(function(resolve){ setTimeout(resolve, 500); }).then(function(){
-            return attempt(tries + 1);
-          });
-        }
-        throw e;
-      }).then(function(v){ clearTimeout(timer); return v; }, function(e){ clearTimeout(timer); throw e; });
-    };
-    return attempt(0);
+    //
+    // 0.6.4 删掉了「网络层失败自动重试一次」。
+    // 那是 0.6.3 为「回前台读取失败」加的措施，实质什么都没改变——真正的
+    // 原因是 Go 侧复用了已被系统回收的 keep-alive 连接（已在 httpx.New 里
+    // 改成 DisableKeepAlives）。重试只是把一次失败变成两次失败 + 500ms 卡顿，
+    // 顺带让「读取失败」来得更晚。现在失败就是失败，界面给「重试」按钮，
+    // 由用户决定（用户原话：「你现有的措施全部删掉」）。
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var opt = o || {};
+    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
+    if (ctrl) opt.signal = ctrl.signal;
+    return fetch(u, opt).then(function(r){
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).catch(function(e){
+      if (e && e.name === 'AbortError') throw new Error('请求超时，请检查网络后重试');
+      throw e;
+    }).then(function(v){ clearTimeout(timer); return v; },
+            function(e){ clearTimeout(timer); throw e; });
   }
 
   /* ---------- 通用 UI 工具 ---------- */
@@ -1236,25 +1260,15 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     nm.appendChild(p); nm.appendChild(s);
     top.appendChild(av); top.appendChild(nm);
 
-    // 余额和标题同一行、靠右。这样右侧是「余额 → ···」一列对齐，
-    // 左侧不再有 48px 的空白带，卡片整体也矮了一截。
+    // 余额和标题同一行、靠右。
+    // 0.6.4：右上角那个「···」已彻底删除（用户原话「这个玩意不要给我保留了」），
+    // 余额成为标题行最右侧的元素，卡片右侧不再多一列 32px 的空按钮位。
     var bal = document.createElement('div'); bal.className = 'balance';
     var n = document.createElement('span'); n.className = 'n';
     n.textContent = r.error ? '—' : fmtMoney(r.balance);
     var u = document.createElement('span'); u.className = 'u'; u.textContent = r.unit || '积分';
     bal.appendChild(n); bal.appendChild(u);
     top.appendChild(bal);
-
-    // 卡片右上角的管理入口：用户明确要求「删除入口」，不能藏在设置里
-    var more = document.createElement('button');
-    more.className = 'c-more';
-    more.setAttribute('aria-label', '账号管理');
-    more.innerHTML = ICON('more');
-    more.addEventListener('click', function(e){
-      e.stopPropagation();
-      openAccountMenu(r);
-    });
-    top.appendChild(more);
     card.appendChild(top);
 
     var foot = document.createElement('div'); foot.className = 'c-foot';
@@ -1302,10 +1316,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
   // 账号行（紧凑视图）：一行之内放完头像 / 名称 / 余额 / 操作
   //
-  // compact 只用来控制「要不要渲染 ··· 令牌入口」：
-  // 紧凑行不放（挤在任务和签到中间像个多余的点），卡片视图的 ··· 菜单里照样能进。
+  // 0.6.4：这里原本还有个「···」令牌入口，现已删除。账号管理与令牌统一在
+  // 设置 → 账号 → 点某个账号 里，主列表只保留「任务 / 抽奖 / 签到」三个动作。
   function rowOf(r){
-    var compact = true;
     var row = document.createElement('div');
     row.className = 'row-item' + (r.error ? ' err' : '');
     row.setAttribute('data-key', (r.provider || '') + '|' + (r.account_id || ''));
@@ -1346,34 +1359,17 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     row.appendChild(main);
 
     var act = document.createElement('div'); act.className = 'row-act';
-    // 紧凑行：任务 / 抽奖用文字小胶囊（高频），令牌进 ···（低频）。
+    // 紧凑行：任务 / 抽奖 用文字小胶囊（高频），其余动作一个都不放。
     //
     // 0.6.2：上一版这里放的是 30px 的纯图标方框，两个图标吃掉 64px 宽度，
     // 名字被挤成「AiPy Pro · AiPy ...」，而且图标本身也看不出是任务还是抽奖。
     // 换成同样尺寸的文字反而更窄、更好认。
+    // 0.6.4：原本夹在「任务」和「签到」之间的 ··· 已删除（用户：「三个点占地方」）。
     if (r.has_tasks && !r.error){
       act.appendChild(pillBtn('', '任务', 'mute', '任务', function(){ openTasks(r); }));
     }
     if (r.has_lottery){
       act.appendChild(pillBtn('', '抽奖', 'mute', '抽奖', function(){ openLottery(r); }));
-    }
-    // 令牌入口在紧凑行里不再渲染 ···。
-    //
-    // 为什么：紧凑行本来就窄，而这个按钮只服务 AiPy 一个平台的低频操作，
-    // 塞在「任务/抽奖」和「签到」之间，看上去就像夹在两个按钮中间的
-    // 一个多余的点（用户的原话就是「任务跟一千（签到）中间还有三个点」）。
-    // 令牌在卡片视图的 ··· 菜单里一样能进，功能没少。
-    if (r.has_tokens && !compact){
-      var rowMore = document.createElement('button');
-      rowMore.className = 'c-more';
-      rowMore.style.width = '26px'; rowMore.style.height = '26px';
-      rowMore.setAttribute('aria-label', '更多操作');
-      rowMore.innerHTML = ICON('more');
-      rowMore.addEventListener('click', function(e){
-        e.stopPropagation();
-        openAccountMenu(r);
-      });
-      act.appendChild(rowMore);
     }
     var btn = document.createElement('button');
     btn.className = 'pill' + (r.error ? ' fail' : (r.checked_in ? ' done' : ''));
@@ -1467,25 +1463,73 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     return rows;
   }
 
+  // hasTokens：这个账号所属平台有没有令牌管理能力。
+  //
+  // 数据来源是 /api/providers 的 Meta.Tokens（目前只有 AiPy）。
+  // 为什么不直接读 r.has_tokens：设置页账号列表来自 /api/accounts，
+  // 那份数据不含能力字段，只有列表行（enrich 打过标记）才有。
+  function hasTokens(r){
+    if (r && r.has_tokens) return true;
+    for (var i = 0; i < state.providers.length; i++){
+      if (state.providers[i].id === (r && r.provider)) return !!state.providers[i].tokens;
+    }
+    return false;
+  }
+
   function load(silent){
     if (!silent) showSkeleton();
     return j('/api/providers').then(function(ps){
       state.providers = Array.isArray(ps) ? ps : [];
-      return Promise.all([j('/api/query'), j('/api/accounts')]);
+      // allSettled 而不是 all（0.6.4）。
+      //
+      // 原来用 Promise.all：查询或者账号列表任一失败，整轮 load 直接判失败，
+      // 界面被替换成「读取失败」，连上一次已经拿到的数据都看不见了。
+      // 但实际上这两路是独立的——账号列表是从本地文件读的，几乎不会失败，
+      // 真失败的是查询。用 allSettled 之后：哪路成功就用哪路的数据，
+      // 失败的那路保留上一次的值，界面不打回空白。
+      return new Promise(function(resolve){
+        if (typeof Promise.allSettled !== 'function'){
+          // 老 WebView 兜底：等价语义手动实现
+          var got = [null, null], left = 2;
+          function done(){ if (--left === 0) resolve(got); }
+          j('/api/query').then(function(v){ got[0] = {status:'fulfilled', value:v}; done(); },
+                               function(e){ got[0] = {status:'rejected', reason:e}; done(); });
+          j('/api/accounts').then(function(v){ got[1] = {status:'fulfilled', value:v}; done(); },
+                                  function(e){ got[1] = {status:'rejected', reason:e}; done(); });
+          return;
+        }
+        Promise.allSettled([j('/api/query'), j('/api/accounts')]).then(resolve);
+      });
     }).then(function(both){
-      var rows = Array.isArray(both[0]) ? both[0] : [];
-      var accts = Array.isArray(both[1]) ? both[1] : [];
-      var enabled = {};
-      for (var i = 0; i < accts.length; i++) enabled[accts[i].account_id] = accts[i].enabled;
-      for (var k = 0; k < rows.length; k++){
-        if (enabled.hasOwnProperty(rows[k].account_id)) rows[k].enabled = enabled[rows[k].account_id];
+      var q = both[0] || {}, a = both[1] || {};
+      var rows = (q.status === 'fulfilled' && Array.isArray(q.value)) ? q.value : null;
+      var accts = (a.status === 'fulfilled' && Array.isArray(a.value)) ? a.value : null;
+      if (rows){
+        if (accts){
+          var enabled = {};
+          for (var i = 0; i < accts.length; i++) enabled[accts[i].account_id] = accts[i].enabled;
+          for (var k = 0; k < rows.length; k++){
+            if (enabled.hasOwnProperty(rows[k].account_id)) rows[k].enabled = enabled[rows[k].account_id];
+          }
+        }
+        state.rows = enrich(rows);
+        render();
+        return true;
       }
-      state.rows = enrich(rows);
-      render();
-      // 返回成功标志：调用方（自动签到）据此判断是否需要 reload 兜底
-      return true;
+      // 查询失败：保留旧数据，只在活动条上提示一次，绝不把列表打回空白。
+      if (state.rows.length){
+        actErr('读取失败：' + ((q.reason && q.reason.message) || '请稍后重试'), 6000);
+        return false;
+      }
+      var list = $('list');
+      list.innerHTML =
+        '<div class="empty"><div class="ring">' + ICON('warn') + '</div>' +
+        '<h2>读取失败</h2><p>' + esc((q.reason && q.reason.message) || '未知错误') + '</p>' +
+        '<button class="btn filled" id="retryBtn" style="max-width:220px">重新加载</button></div>';
+      var rb = $('retryBtn');
+      if (rb) rb.addEventListener('click', function(){ load(false); });
+      return false;
     }).catch(function(e){
-      // 失败态给出可点击的重试，而不是一行"读取失败"让用户卡死
       var list = $('list');
       list.innerHTML =
         '<div class="empty"><div class="ring">' + ICON('warn') + '</div>' +
@@ -1493,8 +1537,6 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         '<button class="btn filled" id="retryBtn" style="max-width:220px">重新加载</button></div>';
       var rb = $('retryBtn');
       if (rb) rb.addEventListener('click', function(){ load(false); });
-      // 返回失败标志而不是抛出：下拉刷新/按钮刷新等调用点不用各自接异常，
-      // 自动签到则靠这个标志决定是否整页 reload 兜底。
       return false;
     });
   }
@@ -1639,6 +1681,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   function checkinAll(opts){
     if (state.busy) return Promise.resolve(null);
     var quiet = !!(opts && opts.quiet);   // 启动自动跑：完成后不弹 toast，只更新活动条
+    // 轮次 id：本次执行的所有日志共用它，用户贴日志时能顺出完整时间线
+    var round = roundId();
     state.busy = true;
     var b = $('btnAll');
     var origHTML = b ? b.innerHTML : '';
@@ -1685,29 +1729,34 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
             stat.bad++;
             stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
               status: 'fail', message: x.error });
+            markDaily('account', round, row, 'fail');
             actErr(pname(row) + ' 签到失败：' + x.error, 4000);
           } else if (x && x.already){
             stat.skip++;
             stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
               status: 'already', message: '今日已签', gain: (x && x.gain) || 0,
               unit: (x && x.unit) || '' });
+            markDaily('account', round, row, 'already');
             actDone(pname(row) + ' 今日已签' + gainTxt(x), 1600);
           } else if (x && x.ok){
             stat.ok++;
             stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
               status: 'ok', message: '签到成功', gain: (x && x.gain) || 0,
               unit: (x && x.unit) || '' });
+            markDaily('account', round, row, 'ok');
             actDone(pname(row) + ' 签到成功' + gainTxt(x), 1600);
           } else {
             stat.bad++;
             stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
               status: 'fail', message: (x && x.message) || '签到未成功' });
+            markDaily('account', round, row, 'fail');
             actErr(pname(row) + ' 签到未成功', 4000);
           }
         }, function(e){
           stat.bad++;
           stat.lines.push({ provider: row.provider, label: pname(row) + pshort(row),
             status: 'fail', message: (e && e.message) || '网络错误' });
+          markDaily('account', round, row, 'fail');
           actErr(pname(row) + ' 签到失败：' + (e && e.message ? e.message : '网络错误'), 4000);
         })
         .then(function(){
@@ -1719,6 +1768,8 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 
     // 顺序：读状态 → 逐个签到 → 领任务奖励 → 抽奖 → 刷新列表
     actShow('正在获取账号状态…');
+    // 打点「今天开始跑一轮」：落盘，进程被杀也不会因为「又开了一次 App」重签
+    markDaily('begin', round, quiet ? 'start' : 'manual');
     return loadStates()
       .then(function(){
         actShow(total ? ('准备签到，共 ' + total + ' 个待签账号…') : '账号都已是已签状态，检查奖励…');
@@ -1760,6 +1811,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       })
       .then(function(){
         var sum = summaryOf(stat);
+        // 走完一轮才落「今天已跑过」：中途被杀会停在 begin 的 Done=false，
+        // 下次打开允许补跑，不会被误判成「今天签完了」
+        markDaily('finish', round);
         // 一次一键签到只推一条汇总（用户明确要求，不逐账号刷屏）。
         // 不 await：推送是附加价值，绝不该让「完成」提示等它。
         pushSummary(quiet ? 'start' : 'manual', stat, sum);
@@ -2082,344 +2136,508 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
         p.innerHTML = text;
         body.appendChild(p);
       }
-      para('① 打开 App 自动签一次',
-        '打开就算一次完整的「一键签到」：' +
-        '<b>签到 → 领每日任务奖励 → 抽奖</b>，三件事一起做。' +
-        '进度显示在最上面那条提示里，比如「百度搭子 正在签到…（2/3）」。');
-      para('② 切后台回来不会签',
-        '回到前台只刷新列表，不发签到请求。' +
-        '想补签或重试，点底部「一键签到」，它和打开 App 做的事完全一样。');
+      para('① 一天只自动签一次',
+        '打开 App 先看今天有没有跑过：没跑过才做一次完整的' +
+        '<b>签到 → 领每日任务奖励 → 抽奖</b>；跑过就只刷新数据，' +
+        '并在顶部列出<b>哪几个没签到</b>，不会再发签到请求。');
+      para('② 切后台回来什么都不会签',
+        '回到前台只刷新列表。想补签或重试，点底部「一键签到」，' +
+        '它每次都是真的跑一轮，不受「今天跑过」的限制。');
       para('③ 只处理「未签」的账号',
         '已签的账号不会再发请求。百度搭子的每日积分由平台在你当天第一次访问时发放，' +
         '所以我们看到它「已签」是真实状态。');
     });
   }
 
-  /* ---------- 设置：账号管理 / 备份 / 版本 ---------- */
-  function openSettings(){    openSheet('设置', '外观、账号、备份与运行日志。', function(body, close){
-      body.appendChild(el('div', 'sect-h', '外观'));
-      var themeRow = el('div', 'seg');
-      // 只有浅色 / 深色两个选项。「跟随系统」已移除——理由见 applyTheme 上方注释。
-      THEMES.forEach(function(t){
-        var seg = el('button', 'seg-item' + (readTheme() === t ? ' on' : ''), THEME_LABEL[t]);
-        seg.addEventListener('click', function(){
-          setTheme(t);
-          var all = themeRow.querySelectorAll('.seg-item');
-          for (var i = 0; i < all.length; i++) all[i].classList.remove('on');
-          seg.classList.add('on');
-        });
-        themeRow.appendChild(seg);
-      });
-      body.appendChild(themeRow);
+  /* ---------- 设置（0.6.4：四个分页签） ----------
+     用户要求：「设置里你的内容太复杂了，重新设计下 UI，要分页签」，
+     并拍板分四个：通知 / 账号 / 数据 / 日志。
 
-      // 通知入口放在「外观」之后、「账号管理」之前：它是全局配置，
-      // 和具体账号无关，放在账号列表里会被当成账号级设置。
-      function navRow(icon, title, sub, fn){
-        var b = el('button', 'nav-row');
-        var ic = el('span', 'nav-ic'); ic.innerHTML = ICON(icon);
-        b.appendChild(ic);
-        var t = el('span', 'nav-t');
-        t.appendChild(el('b', '', title));
-        t.appendChild(el('i', '', sub));
-        b.appendChild(t);
-        var go = el('span', 'nav-go'); go.innerHTML = ICON('arrow');
-        b.appendChild(go);
-        b.addEventListener('click', function(){ close(); setTimeout(fn, 240); });
-        body.appendChild(b);
-        return b;
-      }
-      body.appendChild(el('div', 'sect-h', '通知'));
-      var notifyRow = navRow('bell', '签到通知', '未配置', openNotify);
-      // 顺手把状态写进副标题：不用点进去就知道开没开
-      j('/api/notify/config').then(function(res){
-        var c = (res && res.config) || {};
-        var sub = '未配置';
-        if (res && res.disabled) sub = '已被自动关闭，点进去检查地址';
-        else if (c.enabled && c.url) sub = '已开启 · ' + (c.type || '');
-        else if (c.url) sub = '已配置，未启用';
-        notifyRow.querySelector('i').textContent = sub;
-      }).catch(function(){});
+     「外观」不在这里——主题切换在主界面顶部，设置里不再重复一遍。
+     每个 Tab 只放自己的东西，互不嵌套弹层，避免「点开设置又弹一层、
+     还得回去再点」的来回折腾（这正是上一版被说「太复杂」的原因）。 */
+  function openSettings(){
+    var TABS = [
+      { id: 'notify', name: '通知' },
+      { id: 'account', name: '账号' },
+      { id: 'data', name: '数据' },
+      { id: 'log', name: '日志' }
+    ];
+    var cur = 'notify';
 
-      body.appendChild(el('div', 'sect-h', '账号管理'));
-      var accBox = el('div', '');
-      body.appendChild(accBox);
+    openSheet('设置', '', function(body, close){
+      // 分页签：横向四等分，当前页签用实心胶囊，一眼知道在哪一页
+      var bar = el('div', 'seg');
+      var pane = el('div', 'tab-pane');
+      var items = {};
 
-      function refreshAccounts(){
-        j('/api/accounts').then(function(list){
-          accBox.textContent = '';
-          if (!Array.isArray(list) || !list.length){
-            accBox.appendChild(el('div', 'sheet-sub', '还没有账号，点底部「添加账号」。'));
-            return;
-          }
-          list.forEach(function(a){
-            var row = el('div', 'acc-row' + (a.enabled ? '' : ' off'));
-            var dot = el('span', 'dot');
-            var h = hueOf(a.provider);
-            dot.style.background = 'linear-gradient(135deg,hsl(' + h + ',72%,58%),hsl(' + ((h + 34) % 360) + ',72%,50%))';
-            dot.textContent = initials(platformName(a.provider));
-            var info = el('div', 'info');
-            info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
-            info.appendChild(el('i', '', a.account_id));
-            row.appendChild(dot); row.appendChild(info);
-
-            var btnToggle = el('button', 'mini', a.enabled ? '停用' : '启用');
-            btnToggle.addEventListener('click', function(){
-              post('/api/account/toggle', {
-                provider: a.provider, account_id: a.account_id, enabled: !a.enabled
-              }).then(function(r){
-                if (!r.ok){ toast(r.error || '操作失败'); return; }
-                refreshAccounts(); load(true);
-              }).catch(function(e){ toast('操作失败：' + e.message); });
-            });
-            row.appendChild(btnToggle);
-
-            // 二次点击确认：WebView 里 window.confirm 常被吞掉，不能依赖它
-            var armed = false, resetTimer;
-            var btnDel = el('button', 'mini', '删除');
-            btnDel.addEventListener('click', function(){
-              if (!armed){
-                armed = true; btnDel.textContent = '确认删除'; btnDel.classList.add('del');
-                resetTimer = setTimeout(function(){
-                  armed = false; btnDel.textContent = '删除'; btnDel.classList.remove('del');
-                }, 4000);
-                return;
-              }
-              clearTimeout(resetTimer);
-              post('/api/account/delete', { provider: a.provider, account_id: a.account_id })
-                .then(function(r){
-                  if (!r.ok){ toast(r.error || '删除失败'); return; }
-                  toast('已删除账号'); refreshAccounts(); load(true);
-                }).catch(function(e){ toast('删除失败：' + e.message); });
-            });
-            row.appendChild(btnDel);
-            accBox.appendChild(row);
-          });
-        }).catch(function(e){
-          accBox.appendChild(el('div', 'sheet-sub', '读取账号失败：' + e.message));
-        });
-      }
-      refreshAccounts();
-
-      // 手动导入入口（设置页也能直接进）
-      var quick = el('div', 'row-btns');
-      var qAdd = el('button', 'btn ghost', '手动添加凭据');
-      qAdd.addEventListener('click', function(){
-        close(); setTimeout(function(){ openManualSheet(''); }, 260);
-      });
-      quick.appendChild(qAdd);
-      body.appendChild(quick);
-
-      body.appendChild(el('div', 'sect-h', '备份导出'));
-      var notice = el('div', 'notice', '备份里是明文 Cookie / Token，只存本机。别发到聊天、网盘或任何第三方。');
-      body.appendChild(notice);
-      var fExp = mkField('备份内容（可长按全选复制）', 'textarea', {
-        readonly: 'readonly', rows: '6', class: 'mono', placeholder: '点下面的「生成备份」'
-      });
-      // class 属性用 setAttribute 会覆盖 className，这里显式设置
-      fExp.input.className = 'mono';
-      body.appendChild(fExp.wrap);
-      var expBtns = el('div', 'row-btns');
-      var btnExp = el('button', 'btn ghost', '生成备份');
-      var btnFile = el('button', 'btn ghost', '存成文件');
-      expBtns.appendChild(btnExp); expBtns.appendChild(btnFile);
-      body.appendChild(expBtns);
-      var btnCopy = el('button', 'btn ghost', '复制到剪贴板');
-      btnCopy.style.width = '100%';
-      body.appendChild(btnCopy);
-      var lastBackup = null;
-      btnExp.addEventListener('click', function(){
-        j('/api/export').then(function(d){
-          lastBackup = d;
-          fExp.input.value = JSON.stringify(d, null, 2);
-          toast('备份已生成（' + (d.accounts || []).length + ' 个账号）');
-        }).catch(function(e){ toast('导出失败：' + e.message); });
-      });
-      btnFile.addEventListener('click', function(){
-        saveBackupFile();
-      });
-      btnCopy.addEventListener('click', function(){ copyText(fExp.input); });
-
-      body.appendChild(el('div', 'sect-h', '备份导入'));
-      var fImp = mkField('把备份 JSON 粘贴到这里', 'textarea', {
-        rows: '6', placeholder: '{"version":1,"accounts":[...]}'
-      });
-      fImp.input.className = 'mono';
-      body.appendChild(fImp.wrap);
-
-      // 从文件导入：手机上有备份文件时不用再长按复制粘贴一大段 JSON
-      var btnPick = el('button', 'btn ghost', '选择备份文件');
-      btnPick.style.width = '100%';
-      btnPick.addEventListener('click', function(){
-        pickBackupFile(function(text){
-          fImp.input.value = text;
-          toast('已读取文件，点「导入备份」应用');
-        });
-      });
-      body.appendChild(btnPick);
-
-      var btnImp = el('button', 'btn filled', '导入备份');
-      btnImp.style.width = '100%';
-      btnImp.style.marginTop = '10px';
-      btnImp.addEventListener('click', function(){
-        var txt = fImp.input.value.trim();
-        if (!txt){ toast('先粘贴备份内容或选择备份文件'); return; }
-        btnImp.disabled = true;
-        post('/api/import', { text: txt }).then(function(r){
-          btnImp.disabled = false;
-          if (!r.ok){ toast('导入失败：' + (r.error || '未知错误')); return; }
-          toast('导入成功：新增 ' + r.added + (r.skipped ? '，跳过 ' + r.skipped : ''));
-          refreshAccounts(); load(true);
-        }).catch(function(e){
-          btnImp.disabled = false; toast('导入失败：' + e.message);
-        });
-      });
-      body.appendChild(btnImp);
-
-      /* ---------- 运行日志 ----------
-         用户原话：「设置里添加日志功能，这样有问题了也容易快速定位。」
-         0.6.3 又提了一条更要紧的：「正常的时候一点日志都看不到，只能猜是哪个动作出的问题」——
-         所以现在**默认显示全部级别**（info 也记），并且在上面加「全部 / 只看异常」两个切换：
-           · 全部：把「启动签到」「跳过推送」「推送成功」这类关键动作也列出来，
-             用户能直接看到「它自己又跑了一轮」这种事实，而不是靠感觉；
-           · 只看异常：只留 warn / error，排查具体报错时用。
-         日志在写入侧已脱敏（cookie/token 一律 ***），复制出去是安全的。 */
-      body.appendChild(el('div', 'sect-h', '运行日志'));
-      var logHint = el('div', 'notice soft',
-        '记录关键动作与出错的请求，最多保留 400 条，凭据一律脱敏，可直接复制发出去。' +
-        '想看清「到底哪一步在跑」，切到「全部」。');
-      body.appendChild(logHint);
-
-      var logBar = el('div', 'row-btns');
-      var btnLogAll = el('button', 'btn filled', '全部');
-      var btnLogErr = el('button', 'btn ghost', '只看异常');
-      logBar.appendChild(btnLogAll); logBar.appendChild(btnLogErr);
-      body.appendChild(logBar);
-
-      var logBox = el('div', 'logbox');
-      body.appendChild(logBox);
-
-      var logBtns = el('div', 'row-btns');
-      var btnLogRefresh = el('button', 'btn ghost', '刷新');
-      var btnLogCopy = el('button', 'btn ghost', '复制全部');
-      var btnLogClear = el('button', 'btn ghost', '清空');
-      logBtns.appendChild(btnLogRefresh);
-      logBtns.appendChild(btnLogCopy);
-      logBtns.appendChild(btnLogClear);
-      body.appendChild(logBtns);
-
-      var lastLogs = [];
-      // onlyErr=false 是默认：先让用户看见全部动作，这是他要的
-      var onlyErr = false;
-
-      function applyLogFilter(){
-        btnLogAll.className = 'btn ' + (onlyErr ? 'ghost' : 'filled');
-        btnLogErr.className = 'btn ' + (onlyErr ? 'filled' : 'ghost');
+      function pick(id){
+        cur = id;
+        for (var k in items) items[k].className = 'seg-item' + (k === id ? ' on' : '');
+        pane.textContent = '';
+        // 每次切页重画：保证进 Tab 拿的是最新数据（账号可能刚改过）
+        (BUILDERS[id] || function(){}) (pane, close);
       }
 
-      // 网络错误的消息里常带完整 URL（Go 的 *url.Error 就这么拼），
-      // 而路径上一行已经显示了，重复一长串只会把真正的原因挤出屏幕。
-      // 这里把消息里的协议+host 部分砍掉，只留错误本身。
-      function trimURL(text){
-        if (!text) return '';
-        return text.replace(/https?:\/\/[^\s"']+/g, function(u){
-          var i = u.indexOf('/', u.indexOf('//') + 2);
-          return i > 0 ? u.slice(i) : u;
-        });
-      }
-
-      function logLine(e){
-        var row = el('div', 'logrow' + (e.level && e.level !== 'info' ? ' ' + e.level : ''));
-        row.appendChild(el('span', 'lt', e.time || ''));
-        var msg = el('span', 'lm');
-        var head = [];
-        if (e.method) head.push(e.method);
-        if (e.path) head.push(e.path);
-        if (e.scope && e.scope !== 'http') head.unshift(e.scope);
-        msg.appendChild(el('b', '', head.join(' ')));
-        var tail = [];
-        if (e.status) tail.push('HTTP ' + e.status);
-        if (e.code) tail.push('code ' + e.code);
-        // 只在耗时真的偏大时才显示：正常请求几十毫秒写出来是噪音，
-        // 排查超时时这一栏才是有用信息
-        if (e.cost_ms && e.cost_ms >= 1000) tail.push((e.cost_ms / 1000).toFixed(1) + 's');
-        if (e.msg) tail.push(trimURL(e.msg));
-        else if (e.resp) tail.push(trimURL(e.resp));
-        if (tail.length) msg.appendChild(el('div', 'sub', tail.join(' · ')));
-        row.appendChild(msg);
-        return row;
-      }
-
-      function renderLogs(){
-        j('/api/logs?limit=200').then(function(res){
-          var all = (res && res.logs) || [];
-          var logs = onlyErr ? all.filter(function(e){
-            return e.level && e.level !== 'info';
-          }) : all;
-          lastLogs = logs;
-          logBox.textContent = '';
-          if (!logs.length){
-            logBox.appendChild(el('div', 'logempty',
-              onlyErr ? '没有异常的请求记录。' : '暂时没有日志。'));
-            return;
-          }
-          for (var i = 0; i < logs.length; i++){ logBox.appendChild(logLine(logs[i])); }
-          // 最新的在最上面更容易看：这里滚动到底部（新记录在数组末尾）
-          logBox.scrollTop = logBox.scrollHeight;
-        }).catch(function(e){
-          logBox.textContent = '';
-          logBox.appendChild(el('div', 'logempty', '读取日志失败：' + e.message));
-        });
-      }
-
-      applyLogFilter();
-      btnLogAll.addEventListener('click', function(){
-        if (!onlyErr) return;
-        onlyErr = false; applyLogFilter(); renderLogs();
-      });
-      btnLogErr.addEventListener('click', function(){
-        if (onlyErr) return;
-        onlyErr = true; applyLogFilter(); renderLogs();
+      TABS.forEach(function(t){
+        var b = el('button', 'seg-item' + (t.id === cur ? ' on' : ''), t.name);
+        b.addEventListener('click', function(){ if (cur !== t.id) pick(t.id); });
+        items[t.id] = b;
+        bar.appendChild(b);
       });
 
-      btnLogRefresh.addEventListener('click', function(){ renderLogs(); load(true); });
-      btnLogClear.addEventListener('click', function(){
-        post('/api/logs/clear', {}).then(function(){
-          toast('日志已清空'); renderLogs();
-        }).catch(function(e){ toast('清空失败：' + e.message); });
-      });
-      btnLogCopy.addEventListener('click', function(){
-        if (!lastLogs.length){ toast('暂时没有日志可复制'); return; }
-        var lines = [];
-        for (var i = 0; i < lastLogs.length; i++){
-          var e = lastLogs[i];
-          var seg = [e.date || '', e.time || '', (e.level || 'info').toUpperCase()];
-          if (e.scope) seg.push(e.scope);
-          if (e.method) seg.push(e.method);
-          if (e.path) seg.push(e.path);
-          if (e.status) seg.push('HTTP ' + e.status);
-          if (e.code) seg.push('code ' + e.code);
-          if (e.cost_ms) seg.push(e.cost_ms + 'ms');
-          var line = seg.join(' ');
-          var detail = e.msg || e.resp || '';
-          if (detail) line += ' | ' + detail;
-          lines.push(line);
-        }
-        var txt = '积分矩阵 运行日志（' + lastLogs.length + ' 条）\n' + lines.join('\n');
-        var ta = document.createElement('textarea');
-        ta.value = txt;
-        document.body.appendChild(ta);
-        copyText(ta);
-        document.body.removeChild(ta);
-      });
-
-      renderLogs();
+      body.appendChild(bar);
+      body.appendChild(pane);
 
       var meta = el('div', 'meta', '版本 —');
       body.appendChild(meta);
       j('/api/meta').then(function(m){
-        meta.textContent = '版本 ' + (m.version || '—') + ' · 已支持 ' + (m.providers || 0) + ' 个平台';
+        state.meta = m || null;
+        meta.textContent = '版本 ' + ((m && m.version) || '—') +
+          ' · 已支持 ' + ((m && m.providers) || 0) + ' 个平台';
       }).catch(function(){});
+
+      var BUILDERS = { notify: buildNotifyTab, account: buildAccountTab, data: buildDataTab, log: buildLogTab };
+      pick(cur);
     });
+  }
+
+  // ---------- 通知 Tab ----------
+  // 原来这一整块是「设置 → 签到通知 → 又弹一层」。现在直接摊在这一页里，
+  // 进来就能看到「开没开、推什么、什么时候推」。
+  function buildNotifyTab(pane, close){
+    var cfg = null;
+    var loading = el('div', 'sheet-sub', '加载中…');
+    pane.appendChild(loading);
+
+    function loadCfg(){
+      j('/api/notify/config').then(function(res){
+        loading.remove();
+        if (!res || res.ok === false){
+          pane.appendChild(el('div', 'sheet-sub', (res && res.error) || '读取失败'));
+          return;
+        }
+        cfg = res.config || {};
+        render(res);
+      }).catch(function(e){
+        loading.textContent = '读取失败：' + e.message;
+      });
+    }
+
+    function render(res){
+      if (res.disabled){
+        pane.appendChild(el('div', 'notice',
+          '通知已被自动关闭：' + (res.last_error || 'Webhook 连续失败') +
+          '。换个地址后点下面的「恢复通知」。'));
+      } else if (res.fail_streak >= 3){
+        pane.appendChild(el('div', 'notice',
+          '最近连续 ' + res.fail_streak + ' 次推送失败：' + (res.last_error || '') +
+          '。请检查地址是否还有效。'));
+      }
+
+      // 总开关
+      var swRow = el('div', 'chk');
+      var swT = el('div', 'chk-t');
+      swT.appendChild(el('b', '', '启用通知'));
+      swT.appendChild(el('i', '', '关闭后不发送任何推送，签到照常执行'));
+      var sw = el('button', 'sw' + (cfg.enabled ? ' on' : ''));
+      sw.addEventListener('click', function(){
+        cfg.enabled = !cfg.enabled;
+        sw.className = 'sw' + (cfg.enabled ? ' on' : '');
+      });
+      swRow.appendChild(swT); swRow.appendChild(sw);
+      pane.appendChild(swRow);
+
+      // 渠道：五个渠道挤在一行会换行错位，用 3 列网格
+      pane.appendChild(el('div', 'sect-h', '渠道'));
+      var seg = el('div', 'seg');
+      seg.style.flexWrap = 'wrap';
+      NOTIFY_TYPES.forEach(function(t){
+        var b = el('button', 'seg-item' + (cfg.type === t.id ? ' on' : ''), t.name.split('（')[0]);
+        b.style.flex = '1 0 30%';
+        b.addEventListener('click', function(){
+          cfg.type = t.id;
+          var all = seg.querySelectorAll('.seg-item');
+          for (var i = 0; i < all.length; i++) all[i].classList.remove('on');
+          b.classList.add('on');
+          var picked = null;
+          for (var k = 0; k < NOTIFY_TYPES.length; k++) if (NOTIFY_TYPES[k].id === t.id) picked = NOTIFY_TYPES[k];
+          if (picked) fUrl.input.setAttribute('placeholder', picked.ph);
+        });
+        seg.appendChild(b);
+      });
+      pane.appendChild(seg);
+
+      var curType = null;
+      for (var i = 0; i < NOTIFY_TYPES.length; i++) if (NOTIFY_TYPES[i].id === cfg.type) curType = NOTIFY_TYPES[i];
+      var fUrl = mkField('Webhook 地址', 'input', {
+        type: 'text', placeholder: (curType && curType.ph) || '粘贴完整地址',
+        value: cfg.url || ''
+      }, '在群机器人设置里复制「Webhook 地址」整段粘贴进来。');
+      fUrl.input.className = 'mono';
+      pane.appendChild(fUrl.wrap);
+
+      // 触发时机：四个开关合到一张卡里，比散落四个区块省一屏
+      pane.appendChild(el('div', 'sect-h', '什么时候推'));
+      var card = el('div', 'sect-card');
+      function toggleRow(key, title, sub){
+        var row = el('div', 'chk');
+        var t = el('div', 'chk-t');
+        t.appendChild(el('b', '', title));
+        t.appendChild(el('i', '', sub));
+        var s = el('button', 'sw' + (cfg[key] ? ' on' : ''));
+        s.addEventListener('click', function(){
+          cfg[key] = !cfg[key];
+          s.className = 'sw' + (cfg[key] ? ' on' : '');
+        });
+        row.appendChild(t); row.appendChild(s);
+        card.appendChild(row);
+      }
+      toggleRow('on_manual', '手动一键签到后', '点底部按钮跑完一轮时推送');
+      toggleRow('on_start', '打开 App 自动签到后', '默认关闭：会天天收到一条');
+      toggleRow('on_failure', '有账号签到失败时', '失败要第一时间知道，建议开启');
+      toggleRow('always', '一条都没签成也推', '全部已签/全部失败时也发一条，用来确认程序确实跑过');
+      pane.appendChild(card);
+
+      var btns = el('div', 'row-btns');
+      var btnSave = el('button', 'btn filled', '保存');
+      var btnTest = el('button', 'btn ghost', '发测试');
+      var btnResend = el('button', 'btn ghost', '重发上次');
+      btns.appendChild(btnSave); btns.appendChild(btnTest); btns.appendChild(btnResend);
+      pane.appendChild(btns);
+
+      var out = el('div', 'sheet-sub', '');
+      out.style.minHeight = '20px';
+      pane.appendChild(out);
+
+      if (res.disabled){
+        var btnReset = el('button', 'btn ghost', '恢复通知');
+        btnReset.style.width = '100%';
+        btnReset.addEventListener('click', function(){
+          post('/api/notify/reset', {}).then(function(r){
+            if (!r || r.ok === false){ toast((r && r.error) || '恢复失败'); return; }
+            toast('已恢复');
+            pane.textContent = '';
+            loadCfg();
+          }).catch(function(e){ toast('恢复失败：' + e.message); });
+        });
+        pane.appendChild(btnReset);
+      }
+
+      function payload(){
+        return {
+          enabled: !!cfg.enabled, type: cfg.type || 'wecom',
+          url: fUrl.input.value.trim(),
+          on_success: true, on_failure: !!cfg.on_failure, always: !!cfg.always,
+          on_manual: !!cfg.on_manual, on_start: !!cfg.on_start
+        };
+      }
+
+      btnSave.addEventListener('click', function(){
+        var p = payload();
+        if (p.enabled && !p.url){ out.textContent = '启用通知需要先填 Webhook 地址'; return; }
+        btnSave.disabled = true; out.textContent = '正在保存…';
+        post('/api/notify/config', p).then(function(r){
+          btnSave.disabled = false;
+          if (!r || r.ok === false){ out.textContent = (r && r.error) || '保存失败'; return; }
+          out.textContent = '';
+          toast('已保存');
+        }).catch(function(e){ btnSave.disabled = false; out.textContent = '失败：' + e.message; });
+      });
+
+      btnTest.addEventListener('click', function(){
+        var p = payload();
+        if (!p.url){ out.textContent = '先填 Webhook 地址'; return; }
+        btnTest.disabled = true; out.textContent = '先保存再发送…';
+        post('/api/notify/config', p).then(function(r){
+          if (!r || r.ok === false){ btnTest.disabled = false; out.textContent = (r && r.error) || '保存失败'; return; }
+          out.textContent = '正在发送测试消息…';
+          return post('/api/notify/test', {});
+        }).then(function(r){
+          btnTest.disabled = false;
+          if (!r) return;
+          if (r.ok === false){ out.textContent = '发送失败：' + (r.error || '未知错误'); return; }
+          out.textContent = '测试消息已发出，看看群里收到没有。';
+        }).catch(function(e){ btnTest.disabled = false; out.textContent = '发送失败：' + e.message; });
+      });
+
+      // 重发上次结果：拿最近一轮的明细原样再发一条（force 绕过所有开关）。
+      // 能发出去 = 配置和网络都没问题；发不出去 = 错就在这一下里。
+      btnResend.addEventListener('click', function(){
+        if (!lastLines.length){
+          out.textContent = '还没有可重发的记录：先回主页跑一次签到。';
+          return;
+        }
+        btnResend.disabled = true; out.textContent = '正在重发上次结果…';
+        post('/api/notify', {
+          trigger: 'manual', accounts: lastLines, summary: lastSummary,
+          tz_offset: new Date().getTimezoneOffset(), force: true
+        }).then(function(r){
+          btnResend.disabled = false;
+          if (!r || r.ok === false){ out.textContent = '重发失败：' + ((r && r.error) || '未知错误'); return; }
+          if (r.sent === false){ out.textContent = '重发未送达：' + (r.error || '未知原因'); return; }
+          out.textContent = '已重发（' + lastLines.length + ' 个账号），看看收到没有。';
+        }).catch(function(e){ btnResend.disabled = false; out.textContent = '重发失败：' + e.message; });
+      });
+    }
+
+    loadCfg();
+  }
+
+  // ---------- 账号 Tab ----------
+  // 卡片上的「···」删掉之后，账号管理（令牌 / 启停 / 删除）全部收到这里：
+  // 列表 → 点某个账号 → 详情。列表本身只做两件事：看状态、调顺序。
+  function buildAccountTab(pane, close){
+    var tip = el('div', 'notice soft',
+      '点账号进入详情，可管理 API 令牌、启用停用、删除。添加账号在主界面底部按钮。');
+    pane.appendChild(tip);
+
+    var box = el('div', '');
+    pane.appendChild(box);
+
+    function refresh(){
+      j('/api/accounts').then(function(list){
+        box.textContent = '';
+        if (!Array.isArray(list) || !list.length){
+          box.appendChild(el('div', 'sheet-sub', '还没有账号，点主界面底部「添加账号」。'));
+          return;
+        }
+        list.forEach(function(a){
+          var row = el('button', 'nav-row');
+          var dot = el('span', 'dot');
+          var h = hueOf(a.provider);
+          dot.style.background = 'linear-gradient(135deg,hsl(' + h + ',72%,58%),hsl(' + ((h + 34) % 360) + ',72%,50%))';
+          dot.textContent = initials(platformName(a.provider));
+          var info = el('span', 'acc-info');
+          info.appendChild(el('b', '', platformName(a.provider) + (a.label ? ' · ' + a.label : '')));
+          info.appendChild(el('i', '', (a.enabled ? '' : '已停用 · ') + a.account_id));
+          var go = el('span', 'nav-go'); go.innerHTML = ICON('arrow');
+          row.appendChild(dot); row.appendChild(info); row.appendChild(go);
+          if (!a.enabled) row.className += ' off';
+          row.addEventListener('click', function(){
+            close();
+            setTimeout(function(){ openAccountDetail(a); }, 240);
+          });
+          box.appendChild(row);
+        });
+      }).catch(function(e){
+        box.textContent = '';
+        box.appendChild(el('div', 'sheet-sub', '读取账号失败：' + e.message));
+      });
+    }
+    refresh();
+  }
+
+  // ---------- 数据 Tab ----------
+  // 备份导出 / 导入：整块搬过来，只是从「设置页往下滚很久」变成「点一下就到」。
+  function buildDataTab(pane){
+    pane.appendChild(el('div', 'notice',
+      '备份里是明文 Cookie / Token，只存本机。别发到聊天、网盘或任何第三方。'));
+
+    pane.appendChild(el('div', 'sect-h', '导出'));
+    var fExp = mkField('备份内容（可长按全选复制）', 'textarea', {
+      readonly: 'readonly', rows: '5', placeholder: '点下面的「生成备份」'
+    });
+    fExp.input.className = 'mono';
+    pane.appendChild(fExp.wrap);
+
+    var expBtns = el('div', 'row-btns');
+    var btnExp = el('button', 'btn ghost', '生成备份');
+    var btnFile = el('button', 'btn ghost', '存成文件');
+    expBtns.appendChild(btnExp); expBtns.appendChild(btnFile);
+    pane.appendChild(expBtns);
+
+    var btnCopy = el('button', 'btn ghost', '复制到剪贴板');
+    btnCopy.style.width = '100%';
+    pane.appendChild(btnCopy);
+
+    btnExp.addEventListener('click', function(){
+      j('/api/export').then(function(d){
+        fExp.input.value = JSON.stringify(d, null, 2);
+        toast('备份已生成（' + (d.accounts || []).length + ' 个账号）');
+      }).catch(function(e){ toast('导出失败：' + e.message); });
+    });
+    btnFile.addEventListener('click', function(){ saveBackupFile(); });
+    btnCopy.addEventListener('click', function(){ copyText(fExp.input); });
+
+    pane.appendChild(el('div', 'sect-h', '导入'));
+    var fImp = mkField('把备份 JSON 粘贴到这里', 'textarea', {
+      rows: '5', placeholder: '{"version":1,"accounts":[...]}'
+    });
+    fImp.input.className = 'mono';
+    pane.appendChild(fImp.wrap);
+
+    var btnPick = el('button', 'btn ghost', '选择备份文件');
+    btnPick.style.width = '100%';
+    btnPick.addEventListener('click', function(){
+      pickBackupFile(function(text){
+        fImp.input.value = text;
+        toast('已读取文件，点「导入备份」应用');
+      });
+    });
+    pane.appendChild(btnPick);
+
+    var btnImp = el('button', 'btn filled', '导入备份');
+    btnImp.style.width = '100%';
+    btnImp.style.marginTop = '10px';
+    btnImp.addEventListener('click', function(){
+      var txt = fImp.input.value.trim();
+      if (!txt){ toast('先粘贴备份内容或选择备份文件'); return; }
+      btnImp.disabled = true;
+      post('/api/import', { text: txt }).then(function(r){
+        btnImp.disabled = false;
+        if (!r.ok){ toast('导入失败：' + (r.error || '未知错误')); return; }
+        toast('导入成功：新增 ' + r.added + (r.skipped ? '，跳过 ' + r.skipped : ''));
+        load(true);
+      }).catch(function(e){
+        btnImp.disabled = false; toast('导入失败：' + e.message);
+      });
+    });
+    pane.appendChild(btnImp);
+  }
+
+  // ---------- 日志 Tab ----------
+  // 0.6.4：按执行步骤逐条记录（含成功请求），每轮共用 #轮次号。
+  // 默认「全部」，因为用户要看的正是「它到底跑了什么」。
+  function buildLogTab(pane){
+    pane.appendChild(el('div', 'notice soft',
+      '按执行步骤逐条记录（含成功的请求）。每轮一键签到共用同一个 #轮次号，' +
+      '能顺出一条完整时间线。最多保留 1500 条，凭据一律脱敏，可直接复制发出去。'));
+
+    var logBar = el('div', 'row-btns');
+    var btnLogAll = el('button', 'btn filled', '全部');
+    var btnLogErr = el('button', 'btn ghost', '只看异常');
+    logBar.appendChild(btnLogAll); logBar.appendChild(btnLogErr);
+    pane.appendChild(logBar);
+
+    var logBox = el('div', 'logbox');
+    pane.appendChild(logBox);
+
+    var logBtns = el('div', 'row-btns');
+    var btnLogRefresh = el('button', 'btn ghost', '刷新');
+    var btnLogCopy = el('button', 'btn ghost', '复制');
+    var btnLogClear = el('button', 'btn ghost', '清空');
+    logBtns.appendChild(btnLogRefresh);
+    logBtns.appendChild(btnLogCopy);
+    logBtns.appendChild(btnLogClear);
+    pane.appendChild(logBtns);
+
+    var lastLogs = [];
+    var onlyErr = false;
+
+    function applyFilter(){
+      btnLogAll.className = 'btn ' + (onlyErr ? 'ghost' : 'filled');
+      btnLogErr.className = 'btn ' + (onlyErr ? 'filled' : 'ghost');
+    }
+
+    // 网络错误的消息里常带完整 URL（Go 的 *url.Error 就这么拼），
+    // 而路径上一行已经显示了，重复一长串只会把真正的原因挤出屏幕。
+    function trimURL(text){
+      if (!text) return '';
+      return text.replace(/https?:\/\/[^\s"']+/g, function(u){
+        var i = u.indexOf('/', u.indexOf('//') + 2);
+        return i > 0 ? u.slice(i) : u;
+      });
+    }
+
+    function logLine(e){
+      var row = el('div', 'logrow' + (e.level && e.level !== 'info' ? ' ' + e.level : ''));
+      row.appendChild(el('span', 'lt', e.time || ''));
+      var msg = el('span', 'lm');
+      // 第一行：#轮次 + 步骤。step 是后端给的人话步骤名（「签到 百度搭子」
+      // 「领任务奖励」），比只显示 HTTP 方法+路径更接近用户看到的界面动作。
+      var head = [];
+      if (e.round) head.push('#' + e.round);
+      if (e.step) head.push(e.step);
+      else {
+        if (e.scope && e.scope !== 'http') head.push(e.scope);
+        if (e.method) head.push(e.method);
+        if (e.path) head.push(e.path);
+      }
+      msg.appendChild(el('b', '', head.join(' ')));
+      var tail = [];
+      if (e.status) tail.push('HTTP ' + e.status);
+      if (e.code) tail.push('code ' + e.code);
+      // 耗时一律显示：用户要看的就是「每一步花了多久」
+      if (e.cost_ms) tail.push(e.cost_ms + 'ms');
+      if (e.msg) tail.push(trimURL(e.msg));
+      else if (e.resp) tail.push(trimURL(e.resp));
+      if (tail.length) msg.appendChild(el('div', 'sub', tail.join(' · ')));
+      row.appendChild(msg);
+      return row;
+    }
+
+    function renderLogs(){
+      j('/api/logs?limit=600').then(function(res){
+        var all = (res && res.logs) || [];
+        var logs = onlyErr ? all.filter(function(e){
+          return e.level && e.level !== 'info';
+        }) : all;
+        lastLogs = logs;
+        logBox.textContent = '';
+        if (!logs.length){
+          logBox.appendChild(el('div', 'logempty',
+            onlyErr ? '没有异常的请求记录。' : '暂时没有日志。'));
+          return;
+        }
+        // 接口返回的是倒序（最新在前），直接顺序渲染即可，
+        // 不需要滚动到底——用户第一眼就该看到刚发生的事。
+        for (var i = 0; i < logs.length; i++){ logBox.appendChild(logLine(logs[i])); }
+      }).catch(function(e){
+        logBox.textContent = '';
+        logBox.appendChild(el('div', 'logempty', '读取日志失败：' + e.message));
+      });
+    }
+
+    applyFilter();
+    btnLogAll.addEventListener('click', function(){
+      if (!onlyErr) return;
+      onlyErr = false; applyFilter(); renderLogs();
+    });
+    btnLogErr.addEventListener('click', function(){
+      if (onlyErr) return;
+      onlyErr = true; applyFilter(); renderLogs();
+    });
+    btnLogRefresh.addEventListener('click', function(){ renderLogs(); });
+    btnLogClear.addEventListener('click', function(){
+      post('/api/logs/clear', {}).then(function(){
+        toast('日志已清空'); renderLogs();
+      }).catch(function(e){ toast('清空失败：' + e.message); });
+    });
+    btnLogCopy.addEventListener('click', function(){
+      if (!lastLogs.length){ toast('暂时没有日志可复制'); return; }
+      var lines = [];
+      for (var i = 0; i < lastLogs.length; i++){
+        var e = lastLogs[i];
+        var seg = [e.date || '', e.time || '', (e.level || 'info').toUpperCase()];
+        if (e.round) seg.push('[' + e.round + ']');
+        if (e.step) seg.push(e.step);
+        if (e.scope) seg.push(e.scope);
+        if (e.method) seg.push(e.method);
+        if (e.path) seg.push(e.path);
+        if (e.status) seg.push('HTTP ' + e.status);
+        if (e.code) seg.push('code ' + e.code);
+        if (e.cost_ms) seg.push(e.cost_ms + 'ms');
+        var line = seg.join(' ');
+        var detail = e.msg || e.resp || '';
+        if (detail) line += ' | ' + detail;
+        lines.push(line);
+      }
+      // 导出头带上版本与设备信息：贴出去求助时对方一眼知道是哪个环境
+      var head = '积分矩阵 运行日志（' + lastLogs.length + ' 条）\n';
+      head += '版本 ' + ((state.meta && state.meta.version) || '—') +
+              ' · 设备 ' + (navigator.userAgent || '未知') + '\n';
+      var off = new Date().getTimezoneOffset();
+      head += '时间 ' + new Date().toLocaleString() + '（UTC' +
+              (off > 0 ? '-' : '+') + Math.abs(off / 60) + '）\n';
+      var ta = document.createElement('textarea');
+      ta.value = head + lines.join('\n');
+      document.body.appendChild(ta);
+      copyText(ta);
+      document.body.removeChild(ta);
+    });
+
+    renderLogs();
   }
 
   /* ---------- 每日任务（AiPy 等支持任务的平台） ---------- */
@@ -2810,7 +3028,14 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   /* ---------- 卡片右上角 ···：单账号操作 ----------
      用户反馈卡片上并排四个按钮太挤，而这三项都不是每次都要点的。
      卡片上只留「签到」这一个高频动作，剩下的进菜单。 */
-  function openAccountMenu(r){
+  // 账号详情（0.6.4）
+  //
+  // 从前它是卡片右上角「···」弹出的菜单，0.6.4 把 ··· 全删了，入口改成
+  // 「设置 → 账号 → 点某个账号」。内容不变：API 令牌 / 启停 / 删除。
+  //
+  // r 可以是列表里的完整行，也可以是 /api/accounts 返回的精简项——
+  // 后者没有 has_tokens 字段，所以令牌入口按 hasTokens 兜底判断。
+  function openAccountDetail(r){
     var name = platformName(r.provider);
     openSheet(name, r.label || r.account_id || '', function(body, close){
       function navItem(icon, title, sub, fn){
@@ -2842,7 +3067,7 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
       // 再在菜单里重复一遍既占位置又多一次点击。用户的原话是
       // 「aipy 的菜单里只放 api 令牌」——这里照做，别的都不放。
       // 令牌只在支持 TokenManager 的平台出现（目前只有 AiPy），由 Meta.Tokens 决定。
-      if (r.has_tokens) navItem('key', 'API 令牌', '管理平台调用密钥', function(){ openTokens(r); });
+      if (hasTokens(r)) navItem('key', 'API 令牌', '管理平台调用密钥', function(){ openTokens(r); });
 
       var toggle = el('button', 'sheet-item');
       var tt = el('span', 'sheet-txt');
@@ -3251,79 +3476,129 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     loginPendingAt = 0;
     load(true).then(function(){ toast('已同步账号'); });
   }
-  // 整页 reload 的限流版：60 秒内最多一次。
-  // 没有它的话，「失败 → reload → 又失败 → 又 reload」会变成死循环，
-  // 用户看到的是页面一直白屏闪。有了它，最坏情况是「一分钟重试一次」，
-  // 期间界面还能正常显示错误和手动重试按钮。
-  var RELOAD_KEY = 'last_reload_at';
-  function reloadThrottled(){
-    var now = Date.now(), last = 0;
-    try { last = Number(localStorage.getItem(RELOAD_KEY) || 0) || 0; } catch (e) {}
-    if (now - last < 60000) return false;
-    try { localStorage.setItem(RELOAD_KEY, String(now)); } catch (e) {}
-    notifyReload();
-    return true;
-  }
-
-  // 启动自检（0.5.5 重构）
+  // 启动逻辑（0.6.4 重做）
   //
-  // 规则只有两条：
-  //   1. 只有「打开 App」这一个时刻会自动跑一遍完整的一键签到。
-  //      切后台回来、页面重新可见、bfcache 恢复——一律不签。
-  //      原因：这些时机会重复触发，一个下午切十次就发十轮请求，
-  //      容易把账号送进风控名单。要签请自己点底部按钮。
-  //   2. 页面被系统杀掉后重建（白屏/读取失败），允许自动 reload 一次。
-  //      这是自愈，不是签到，所以不受第 1 条限制。
-  var bootedAt = Date.now();
-  var BOOT_FRESH_MS = 40000;   // 超过这个时长还没读完状态，基本可以断定页面是死的
-  var autoTask = null;
+  // 用户拍板的规则只有一条：
+  //   「探测今天是否有签到日志，有就只刷新数据并提示哪几个没签、哪些奖励没领，
+  //     没有签到日志就直接走一遍一键签到。」
+  //
+  // 为什么这么改：自动签到是风控的高危动作，一天跑一次就够；
+  // 一天开几次 App 就签几次，等于自己往黑号名单里走。
+  //
+  // 「今天跑过没有」由引擎侧落盘记录（/api/daily），不是前端记内存——
+  // 进程会被系统随时杀掉，内存留不住，而那正是「一天重复签好几轮」的来源。
+  //
+  // 0.6.4 同时删掉了三类旧措施（用户原话「你现有的措施全部删掉」）：
+  //   · 整页 reload 的 60 秒限流 reloadThrottled；
+  //   · 「连第一屏都读不到就 reload」；
+  //   · 回前台读失败就重建页面。
+  // 它们都在处理「读取失败」的表象，实质什么都没改变——真因是 Go 侧复用了
+  // 已被系统回收的 keep-alive 连接（已在 httpx.New 里改成短连接）。
+  var dailyInfo = null;   // /api/daily 的结果，提示文案用
 
-  // 冷启动：既查询又签到（走完整一键签到流程，与点按钮完全一致）
-  function bootAuto(){
-    if (autoTask) return autoTask;
-    actShow('正在获取账号状态…');
-    autoTask = checkinAll({ quiet: true })
-      .then(function(stat){
-        // 连第一屏都读不到：多半是页面进程已经废了，整页重建才有救
-        if (!stat && !state.rows.length){ reloadThrottled(); }
-        return stat;
-      })
-      .then(function(v){
-        setTimeout(function(){ autoTask = null; }, 3000);
-        return v;
-      }, function(){ autoTask = null; });
-    return autoTask;
+  // 前端日志（scope=app）：启动判定、刷新、失败都留痕。
+  // 走引擎的日志缓冲，和 Go 侧的请求日志在同一条时间线上，
+  // 排查「它为什么没签 / 为什么又签了」时不用两头对时间。
+  function logApp(msg, level){
+    post('/api/log', { level: level || 'info', scope: 'app', msg: msg }).catch(function(){});
   }
 
-  // 回前台：只刷新列表，绝不签到。读不到状态就重建页面（兜底自愈）。
-  function refreshOnResume(){
-    if (state.busy) return;
-    load(true).then(function(ok){
-      if (ok) return;
-      // 刚启动就失败 = 页面出生即残废（iOS 常见），直接重建
-      var age = Date.now() - bootedAt;
-      if (age < BOOT_FRESH_MS){
-        if (!reloadThrottled()) actErr('读取失败，请下拉刷新重试', 8000);
+  // roundId：生成本轮的 4 位短 id，和 Go 侧日志的 round 字段同一格式。
+  // 只用于把「一次执行」的日志串起来，不追求全局唯一。
+  function roundId(){
+    var s = '';
+    for (var i = 0; i < 4; i++) s += '0123456789abcdef'.charAt(Math.floor(Math.random() * 16));
+    return s;
+  }
+
+  // markDaily 把这一轮的进度记到引擎侧（落盘）。
+  //
+  // 三种打点：
+  //   begin   一轮开始（Done=false 立刻落盘，中途被杀下次允许补跑）
+  //   account 单账号结果（ok / already / fail），用于「今天跑过」时提示失败的那几个
+  //   finish  一轮走完（含领奖与抽奖）
+  //
+  // 全部 fire-and-forget：记录失败绝不能影响签到本身。
+  function markDaily(phase, round, row, status){
+    var body = { phase: phase, round: round };
+    if (row){
+      body.provider = row.provider || '';
+      body.account = row.account_id || '';
+      body.status = status || '';
+    }
+    post('/api/daily/mark', body).catch(function(){});
+  }
+
+  // promptAfterRun：今天已经跑过 → 只刷新，并把「还差什么」说清楚。
+  //
+  // 提示只列事实：哪几个账号没签成功、哪几个当时失败。不自动重试——
+  // 用户明确要求「当天不再自动重试，只在提示里列出来」，
+  // 因为重试就是又一次写请求，风险还是自己的。
+  function promptAfterRun(){
+    var rows = state.rows || [];
+    var unsigned = [], failed = [];
+    var accts = (dailyInfo && dailyInfo.accounts) || {};
+    for (var i = 0; i < rows.length; i++){
+      var r = rows[i];
+      if (r.error) { failed.push(pname(r) + pshort(r)); continue; }
+      if (r.checked_in) continue;
+      // 今天跑过一轮但仍是未签：当时失败的单独归一类，其余算「未签」
+      if (accts[(r.provider || '') + '|' + (r.account_id || '')] === 'fail'){
+        failed.push(pname(r) + pshort(r));
       } else {
-        actErr('读取失败，请下拉刷新重试', 8000);
+        unsigned.push(pname(r) + pshort(r));
       }
+    }
+    var head = '今日已签到' + (dailyInfo && dailyInfo.at ? '（' + dailyInfo.at + '）' : '') + '，本轮只刷新不重签';
+    var parts = [];
+    if (unsigned.length) parts.push('未签到：' + unsigned.join('、'));
+    if (failed.length) parts.push('失败：' + failed.join('、'));
+    if (!parts.length) parts.push('全部账号已签，无待办');
+    var text = head + '。' + parts.join('；');
+    if (unsigned.length || failed.length){
+      actErr(text + '。要补签请点底部「一键签到」', 10000);
+    } else {
+      actDone(text, 6000);
+    }
+    logApp('启动判定：今天已跑过一轮 → 只刷新，不重签。' + parts.join('；'));
+  }
+
+  // bootCheck：打开 App 时唯一的自动入口。
+  //
+  // 先问引擎「今天跑过没有」，再二选一：
+  //   跑过 → load() 刷新 + 提示（不签、不领、不抽）
+  //   没跑 → checkinAll({quiet:true})，和点「一键签到」完全同一条流程
+  //
+  // 注意：**一键签到按钮的逻辑一个字都没动**。按钮永远真跑一轮，
+  // 不看这里的判定——用户明确警告过「别改一键签到按钮的逻辑」。
+  function bootCheck(){
+    actShow('正在检查今天的签到记录…');
+    return j('/api/daily').then(function(d){
+      dailyInfo = d || null;
+      if (d && d.ran){
+        return load(true).then(function(){ promptAfterRun(); });
+      }
+      return checkinAll({ quiet: true });
+    }).catch(function(e){
+      // 连判定都拿不到（引擎没起来 / 端口没通）：按「没跑过」处理太危险，
+      // 宁可只刷新一次并说明原因，也不要在不确定的情况下自动发写请求。
+      logApp('启动判定失败：' + (e && e.message), 'warn');
+      actErr('读取今日记录失败：' + ((e && e.message) || '未知错误') + '，已跳过自动签到', 8000);
+      return load(true);
     });
   }
-  window.__pointsAutoCheckin = bootAuto;
-  window.__pointsRefresh = refreshOnResume;
 
-  // notifyReload：通知壳层重建页面。优先走 PointsBridge（Android 已实现），
-  // 没有桥时直接 location.reload() 兜底——iOS WKWebView 里整页 reload
-  // 同样会让 WebKit 重建网络连接。
-  function notifyReload(){
-    try {
-      if (window.PointsBridge && typeof PointsBridge.reload === 'function'){
-        PointsBridge.reload();
-        return;
-      }
-    } catch (e) {}
-    try { location.reload(); } catch (e) {}
+  // 回前台：只刷新列表，不签到、不判定、不重建。
+  //
+  // 0.6.4 把它削到只剩 load()：以前这里有「读不到就重建页面」的兜底，
+  // 用户实测「实质什么都没改变」，反而因为重建把页面刷白。
+  // 现在读不到就如实显示「读取失败 + 重试按钮」，不猜、不折腾。
+  function refreshOnResume(){
+    if (state.busy) return;
+    load(true);
   }
+  window.__pointsAutoCheckin = bootCheck;
+  window.__pointsRefresh = refreshOnResume;
 
   /* ---------- 启动 ---------- */
   // 主题要在首屏渲染前就定好，否则深色用户会先看到一帧白底再翻黑。
@@ -3332,10 +3607,9 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
   // 视图密度也要在首屏前定好：上次选了紧凑列表，就不要再闪一帧大卡片
   applyView(readView());
   showSkeleton();
-  // 打开 App 只跑这一次：等同于用户亲手点了一下「一键签到」，
-  // 签到 → 领任务奖励 → 抽奖 三件套一条龙，不是只签到。
-  // 之后切后台回来不再自动签，也不再自动签第二轮。
-  bootAuto();
+  // 打开 App 只跑这一处判定：今天跑过就只刷新 + 提示，没跑过才走完整流程。
+  // 这条路径是「自动签到」的唯一入口，壳层不再单独注入签到。
+  bootCheck();
   // 壳层在 WorkBuddy 登录后会 reload 本页，内存变量清零：
   // 从 localStorage 认出「上次是去登录 WorkBuddy」，把换取 token 的流程续上。
   (function(){
@@ -3367,9 +3641,6 @@ function ICON(name){
     checkAll:'<path d="M1.5 12.5l4.5 4.5 8-9"/><path d="M8.5 16l1.5 1.5 11-12"/>',
     plus:'<path d="M12 5v14"/><path d="M5 12h14"/>',
     arrow:'<path d="M5 12h13"/><path d="M12.5 5.5L19 12l-6.5 6.5"/>',
-    more:'<circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
-         '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
-         '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
     refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
     task:'<rect x="4" y="3.5" width="15" height="15" rx="3"/><path d="M8.5 12l2.5 2.5 5-5.5"/>',
     // 齿轮：外圈八齿 + 中心圆孔（与 icons.go 保持一致）。

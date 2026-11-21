@@ -19,8 +19,29 @@ type Client struct {
 }
 
 // New 构造默认客户端。
+//
+// 关键：DisableKeepAlives = true（0.6.4 修的根因）。
+//
+// 之前「切回前台第一次读取必失败、点重新加载也没用」的真正原因是连接复用：
+// App 进后台后，内核会悄悄回收空闲 TCP 连接，但 Go 的连接池还以为它是活的，
+// 回到前台第一个请求就把数据写进一个已经死掉的 socket，等不到响应直接报错。
+// 而 WebView 里那一轮 fetch 全都命中这个坏连接，看起来就是「整个页面死了」。
+//
+// 代价是每次请求多一次 TCP+TLS 握手（回环/外网各几十毫秒），
+// 换来的确定性远大于这点开销——我们一轮最多十几个请求，不是长连接场景。
+// 客户端有 20s 超时兜底，不需要靠 keep-alive 撑性能。
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 20 * time.Second}}
+	return &Client{HTTP: &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives:      true,
+			MaxIdleConns:           0,
+			IdleConnTimeout:        time.Second,
+			TLSHandshakeTimeout:    10 * time.Second,
+			ExpectContinueTimeout:  1 * time.Second,
+			MaxResponseHeaderBytes: 64 << 10,
+		},
+	}}
 }
 
 // Response 是脱敏后的响应：只保留状态码与正文，绝不打印请求头（避免 cookie 泄漏）。
@@ -64,6 +85,8 @@ func (c *Client) DoJSON(ctx context.Context, method, url string, headers map[str
 		}
 		// 网络层失败要留痕：用户报「签到不动」时，这行日志能直接区分
 		// 「请求没发出去」和「服务端拒绝」。
+		// 轮次号会自动继承（AddLog 里读 SetRound），这里不用显式传；
+		// step 由调用方在上层记，这一行只负责「哪个地址、什么原因」。
 		AddLog(LogEntry{
 			Level: "error", Scope: "http", Method: method, Path: LogPath(url),
 			CostMS: time.Since(start).Milliseconds(), Msg: "请求失败: " + err.Error(),
@@ -83,13 +106,15 @@ func (c *Client) DoJSON(ctx context.Context, method, url string, headers map[str
 
 // LogOK 记录一条「请求成功」的日志。
 //
-// 为什么不放进 logResponse 一律记：一次一键签到会发出十几个成功请求，
-// 全记下来会把 400 条缓冲瞬间冲满，真出问题时反而翻不到。成功请求由调用方
-// **按需**记录——只在用户会追问「这一步到底跑没跑」的地方记
-// （签到、领任务、抽奖、推送），不做全量。
-func LogOK(scope, method, url string, status int, cost time.Duration) {
+// 0.6.4：原本只在出错时记，用户的原话是「正常日志我一点都看不到，
+// 非得出了错才有日志」。现在成功请求也记，但由调用方在**业务步骤边界**记，
+// 而不是在 logResponse 里对每个请求无脑记一遍：
+//   - 调用方知道自己在干什么（「签到 百度搭子」「领任务奖励」），
+//     记出来的是执行逻辑，不是一堆看不出用途的 URL；
+//   - 一次签到会有上游的拉状态、提交、回查三次请求，全记会稀释关键行。
+func LogOK(scope, step, method, url string, status int, cost time.Duration) {
 	AddLog(LogEntry{
-		Level: "info", Scope: scope, Method: method, Path: LogPath(url),
+		Level: "info", Scope: scope, Step: step, Method: method, Path: LogPath(url),
 		Status: status, CostMS: cost.Milliseconds(), Msg: "成功",
 	})
 }

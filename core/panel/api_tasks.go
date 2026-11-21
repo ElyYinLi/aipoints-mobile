@@ -179,6 +179,7 @@ func (s *Server) handleTaskClaimAll(w http.ResponseWriter, r *http.Request) {
 		Error     string  `json:"error,omitempty"`
 	}
 	out := make([]claimRow, 0, len(list))
+	httpx.AddLog(httpx.LogEntry{Level: "info", Scope: "task", Step: "领任务奖励", Msg: "开始扫描可领任务"})
 	for _, a := range list {
 		if !a.Enabled {
 			continue
@@ -197,20 +198,29 @@ func (s *Server) handleTaskClaimAll(w http.ResponseWriter, r *http.Request) {
 			out = append(out, claimRow{Provider: a.Provider, AccountID: a.AccountID, Error: "凭据损坏"})
 			continue
 		}
+		step := "领任务 " + s.acctLabel(a)
+		t0 := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		tasks, terr := claimer.Tasks(ctx, cred)
 		cancel()
 		if terr != nil {
+			httpx.AddLog(httpx.LogEntry{
+				Level: "warn", Scope: a.Provider, Step: step,
+				CostMS: time.Since(t0).Milliseconds(), Msg: "任务列表读取失败：" + terr.Error(),
+			})
 			out = append(out, claimRow{Provider: a.Provider, AccountID: a.AccountID, Error: terr.Error()})
 			continue
 		}
 		row := claimRow{Provider: a.Provider, AccountID: a.AccountID}
 		var errs []string
+		claimable := 0
 		for _, t := range tasks {
 			if !t.Claimable {
 				continue
 			}
+			claimable++
 			ctx2, cancel2 := context.WithTimeout(r.Context(), 30*time.Second)
+			t1 := time.Now()
 			res, cerr := claimer.ClaimTask(ctx2, cred, t.TaskType)
 			cancel2()
 			if cerr != nil {
@@ -222,11 +232,31 @@ func (s *Server) handleTaskClaimAll(w http.ResponseWriter, r *http.Request) {
 				if row.Unit == "" && res.Unit != "" {
 					row.Unit = res.Unit
 				}
-			} else if res.Error != "" {
-				errs = append(errs, res.Error)
+				httpx.AddLog(httpx.LogEntry{
+					Level: "info", Scope: a.Provider, Step: step,
+					CostMS: time.Since(t1).Milliseconds(),
+					Msg:    "领取成功：" + t.Title + gainLogTail(provider.Result{Gain: res.Gain, Unit: res.Unit}),
+				})
+			} else {
+				httpx.AddLog(httpx.LogEntry{
+					Level: "warn", Scope: a.Provider, Step: step,
+					CostMS: time.Since(t1).Milliseconds(),
+					Msg:    "领取失败：" + t.Title + "（" + orDefault(res.Error, "平台未返回原因") + "）",
+				})
+				if res.Error != "" {
+					errs = append(errs, res.Error)
+				}
 			}
 			// 写请求间隔：同设备批量领取最容易触发风控
 			time.Sleep(800 * time.Millisecond)
+		}
+		// 一个可领的都没有也要留一行：「本轮没有任务需要领」本身就是结论，
+		// 否则用户会怀疑这步是不是根本没跑（0.6.4 加了这行）。
+		if claimable == 0 {
+			httpx.AddLog(httpx.LogEntry{
+				Level: "info", Scope: a.Provider, Step: step,
+				CostMS: time.Since(t0).Milliseconds(), Msg: "没有可领的任务",
+			})
 		}
 		if len(errs) > 0 {
 			row.Error = strings.Join(errs, "；")
@@ -234,6 +264,14 @@ func (s *Server) handleTaskClaimAll(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{"ok": true, "results": out})
+}
+
+// orDefault 空串时返回兜底文案。
+func orDefault(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
 }
 
 // fmtGainNum 去掉无意义的小数位：1.5 → "1.5"，2 → "2"，0.04 → "0.04"。

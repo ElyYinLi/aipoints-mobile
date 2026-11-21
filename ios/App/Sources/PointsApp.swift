@@ -24,11 +24,10 @@ struct PointsApp: App {
                 // 用户在面板里手动切换主题后状态栏还是系统色，看着就是「颜色不对」。
                 .preferredColorScheme(style.dark ? .dark : .light)
         }
-        .onChange(of: scenePhase) { phase in
-            // 进后台时登记一次系统后台刷新机会（iOS 不保证时刻，只作为补签机会）。
-            // 放在 scenePhase 里而不是 AppDelegate，省掉一个 UIKit 桥接。
-            if phase == .background { BackgroundRefresh.schedule() }
-        }
+        // 0.6.4：删掉了 scenePhase 里的后台刷新登记。
+        // 原来每次进后台都排一次 BGAppRefreshTask，到点就在后台跑
+        // MobileCheckinAll()——这正是用户说的「动不动就给我去签到」，
+        // 而且用户完全看不见它跑过。现在 App 没有任何后台执行机会。
     }
 }
 
@@ -36,10 +35,8 @@ struct ContentView: View {
     @EnvironmentObject var engine: Engine
     @ObservedObject private var login = LoginCoordinator.shared
     @State private var webView: WKWebView?
-    /// 进入后台的时刻。用来判断「这次回来要不要整页重建」。
+    /// 进入后台的时刻。0.6.4 起只作诊断，不再参与「回来要不要重建」的判断。
     @State private var awayAt: Date?
-    /// 本次进程是否已跑过启动签到。false = 冷启动，之后都算「回前台」。
-    @State private var bootChecked = false
 
     var body: some View {
         ZStack {
@@ -58,61 +55,28 @@ struct ContentView: View {
             }
         }
         .onAppear { engine.start() }
-        // 「打开软件即签到」：只有冷启动这一次会跑完整的一键签到。
-        // 0.5.5 起：切后台回来只刷新列表，不签到、不领奖——用户明确说过
-        // 「其他切后台等就不要自动签到和领奖了，这样容易黑号」。
+        // 0.6.4：回到前台只刷新一次列表，别的一律不做。
+        //
+        // 这里原本有三段（用户要求「这6个触发全部删掉」「你现有的措施全部删掉」）：
+        //   1. 首次 didBecomeActive 注入 __pointsAutoCheckin()  → 删
+        //   2. 后台 >45s 就 reloadFromBlank() 整页重建          → 删
+        //   3. 注入探活 + DOM 探测（.card,.row 为空即判定页面已死）→ 删
+        //
+        // 第 1 段会让「一天开几次 App 就签几轮」，是黑号的直接来源；
+        // 第 2、3 段是冲着「读取失败」去的，但真因在引擎侧复用了系统已回收的
+        // keep-alive 连接（已改成短连接），重建页面只是把界面刷白。
+        // 现在读不到就如实显示「读取失败 + 重试」，不重建、不猜。
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didEnterBackgroundNotification)) { _ in
             awayAt = Date()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didBecomeActiveNotification)) { _ in
-            let away = awayAt.map { Date().timeIntervalSince($0) } ?? 0
             awayAt = nil
             guard let web = webView, web.url != nil else { return }
-
-            if !bootChecked {
-                // 冷启动：页面自己也会跑（autoTask 去重），这里只兜一手
-                bootChecked = true
-                web.evaluateJavaScript(
-                    "window.__pointsAutoCheckin && window.__pointsAutoCheckin()",
-                    completionHandler: nil)
-                return
-            }
-
-            // 关键修复：iOS 在后台待久了会回收 WKWebView 的 WebContent 进程，
-            // 回来时 JS 上下文已经没了——evaluateJavaScript 没反应，页面 fetch
-            // 全失败，下拉刷新也救不回来（整个进程是死的）。
-            // 之前只在 >45s 时 reload，但系统回收不挑时间，而且 reload() 可能
-            // 复用同一个坏进程（用户：「点击重新加载没用，只能杀掉 App 重开」）。
-            // 现在：先探活，再决定要不要整页重建。
-            if away > 45 {
-                web.reloadFromBlank()
-                return
-            }
-            var decided = false
-            // 兜底：evaluateJavaScript 偶发丢回调，2.5 秒后自己查一次 DOM
-            let grace = {
-                guard !decided else { return }
-                decided = true
-                web.evaluateJavaScript(
-                    "document.querySelectorAll('.card,.row').length > 0 ? 'ok' : 'empty'",
-                    completionHandler: { v, _ in
-                        let r = (v as? String) ?? ""
-                        if !r.contains("ok") { web.reloadFromBlank() }
-                    })
-            }
             web.evaluateJavaScript(
-                "window.__pointsRefresh ? (window.__pointsRefresh(), 'alive') : 'dead'",
-                completionHandler: { value, _ in
-                    let s = (value as? String) ?? ""
-                    if !s.contains("alive") {
-                        // 明确 'dead'：上下文没了，直接重建
-                        if !decided { decided = true; web.reloadFromBlank() }
-                        return
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: grace)
-                })
+                "window.__pointsRefresh && window.__pointsRefresh()",
+                completionHandler: nil)
         }
         .fullScreenCover(item: Binding(
             get: { login.pendingProvider.map(LoginTarget.init) },
@@ -131,7 +95,8 @@ struct ContentView: View {
                     webView?.evaluateJavaScript(
                         "try{localStorage.removeItem('oauth_pending')}catch(e){}", completionHandler: nil)
                 }
-                webView?.reloadFromBlank()
+                // 登录完成后重载页面，让新账号立刻出现在列表里
+                webView?.reload()
             }
         }
     }
@@ -303,36 +268,12 @@ struct PanelWebView: UIViewRepresentable {
     }
 }
 
-/// 后台刷新：iOS 只保证「系统愿意给的时候」执行一次，不保证时刻。
-/// 这里只做一次「打开面板 → 触发一次自动签到」，不常驻、不保活。
-///
-/// 说明：真实生效需要主 target 打开 Background Modes(fetch)，且
-/// BGTaskSchedulerPermittedIdentifiers 里登记该标识（Info.plist 已写）。
-/// 拿不到调度时就静默返回——前台「打开即签到」才是主路径。
-enum BackgroundRefresh {
-    static let taskID = "co.repo.points.refresh"
-
-    static func schedule() {
-        guard #available(iOS 13.0, *) else { return }
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskID)
-        let req = BGAppRefreshTaskRequest(identifier: taskID)
-        req.earliestBeginDate = Date(timeIntervalSinceNow: 45 * 60)  // 至少 45 分钟后
-        try? BGTaskScheduler.shared.submit(req)
-    }
-
-    static func register() {
-        guard #available(iOS 13.0, *) else { return }
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskID, using: nil) { task in
-            task.expirationHandler = { task.setTaskCompleted(success: false) }
-            // 引擎此刻可能还没起来（冷启动后台唤醒）：先用已有账号库做一次签到
-            DispatchQueue.global(qos: .utility).async {
-                let reply = MobileCheckinAll() ?? "[]"
-                task.setTaskCompleted(success: reply.contains("\"error\":\"") == false)
-                schedule()
-            }
-        }
-    }
-}
+// 0.6.4：BackgroundRefresh 整块删除。
+//
+// 它注册了 BGAppRefreshTask，在后台跑 MobileCheckinAll()（整轮签到）。
+// 用户的要求很明确：「不要天天动不动就给我去签到，容易黑号」。
+// 后台执行正是最不可控的一种——用户睡着了它也在签，出事也查不到。
+// 现在 iOS 侧没有任何后台任务，只在「打开 App」时判定一次。
 
 /// 备份文件的存/取。
 ///
@@ -406,19 +347,7 @@ final class PickerDelegate: NSObject, UIDocumentPickerDelegate {
     }
 }
 
-extension WKWebView {
-    /// 整页重建：先跳到 about:blank 再回面板。
-    ///
-    /// 为什么不直接 reload()：当 WebContent 进程已经被系统回收时，reload
-    /// 有时会复用同一个坏掉的进程，页面依旧白屏/读取失败（用户实测：
-    /// 「点击重新加载没用，只能杀掉 App 重开」）。先载入空白页会强制 WebKit
-    /// 换一个新的进程，再把面板载进去，这个才是真的重建。
-    func reloadFromBlank() {
-        let back = url
-        load(URLRequest(url: URL(string: "about:blank")!))
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            guard let self else { return }
-            if let back { self.load(URLRequest(url: back)) }
-        }
-    }
-}
+// 0.6.4：reloadFromBlank() 已删除。
+// 之前用它「强制换掉被系统回收的 WebContent 进程」，但实测（用户原话）
+// 「实质什么都没改变」——真因是 HTTP 连接被复用（引擎侧已改短连接）。
+// 页面不再自己重建：读不到就显示「读取失败 + 重试」，由用户决定。
