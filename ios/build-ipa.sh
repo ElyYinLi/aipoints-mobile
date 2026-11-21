@@ -77,18 +77,17 @@ cp "$ROOT/ios/App/Info.plist" "$APP/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Info.plist" 2>/dev/null || true
 
 echo "== 4/6 生成图标 =="
-ICON="$ROOT/assets/app-icon-512.png"
-if [ -f "$ICON" ]; then
+# 0.7.0：图标不再用 sips 现场缩放。
+# 旧流程只有一个 1024 槽位 + 4 张平铺 PNG，各尺寸靠 sips 临时缩，
+# 结果 App Store / 主屏 / 设置页三种尺寸各自糊一遍。
+# 现在由 tools/gen_icon.py 一次性产出完整 13 尺寸 appiconset（RGB 无 alpha、
+# 满幅方形不预烘焙圆角），actool 直接编译进 Assets.car。
+ICONSET="$ROOT/assets/AppIcon.appiconset"
+if [ -f "$ICONSET/icon-1024.png" ]; then
   ASSETS="$OUT/Assets.xcassets"
   rm -rf "$ASSETS"
   mkdir -p "$ASSETS/AppIcon.appiconset"
-  # actool 的 1024 槽位要 1024x1024，用 sips 放大（矢量图标放大无损观感）
-  sips -z 1024 1024 "$ICON" --out "$ASSETS/AppIcon.appiconset/icon-1024.png" >/dev/null 2>&1 \
-    || cp "$ICON" "$ASSETS/AppIcon.appiconset/icon-1024.png"
-  cat > "$ASSETS/AppIcon.appiconset/Contents.json" <<'JSON'
-{"images":[{"filename":"icon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],
- "info":{"author":"xcode","version":1}}
-JSON
+  cp "$ICONSET"/*.png "$ICONSET"/Contents.json "$ASSETS/AppIcon.appiconset/"
   echo '{"info":{"author":"xcode","version":1}}' > "$ASSETS/Contents.json"
   xcrun actool "$ASSETS" --compile "$APP" --platform iphoneos \
     --minimum-deployment-target "$MIN_IOS" --app-icon AppIcon \
@@ -97,9 +96,10 @@ JSON
   # 平铺图标兜底：只生成 Assets.car 时，iOS 15 的部分安装方式（尤其自签重签）
   # 拿不到图标，会显示白底占位。这里同时铺一组 AppIcon<尺寸>.png 并在
   # Info.plist 里登记 CFBundleIconFiles，两条路都留着。
+  # 注意：直接复用 appiconset 里的成品，不再 sips 现缩。
   for s in 60 120 180 1024; do
-    sips -z $s $s "$ASSETS/AppIcon.appiconset/icon-1024.png" \
-      --out "$APP/AppIcon${s}.png" >/dev/null 2>&1 || true
+    cp "$ICONSET/icon-${s}.png" "$APP/AppIcon${s}.png" 2>/dev/null \
+      || cp "$ICONSET/icon-1024.png" "$APP/AppIcon${s}.png"
   done
   PB=/usr/libexec/PlistBuddy
   $PB -c "Delete :CFBundleIconFiles" "$APP/Info.plist" >/dev/null 2>&1 || true
@@ -116,7 +116,7 @@ JSON
     $PB -c "Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles: string $f" "$APP/Info.plist" >/dev/null 2>&1 || true
   done
 else
-  echo "  跳过：缺少 assets/app-icon-512.png"
+  echo "  跳过：缺少 assets/AppIcon.appiconset/icon-1024.png（先跑 python3 tools/gen_icon.py）"
 fi
 
 echo "== 5/6 签名（ad-hoc）=="

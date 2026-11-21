@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.6.9-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.7.0-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -49,6 +49,7 @@ iOS 从 0.6.9 起改用 `pointsapi://` 自定义 scheme 在进程内直连引擎
 | 📊 **状态可见** | 顶部活动条逐个账号显示进度（`百度搭子 正在签到…（2/3）`），完成后变绿、失败变红，几秒自动收起 |
 | 🔒 **本地优先** | 凭据进 iOS Keychain / Android Keystore，不经任何第三方服务器；引擎不出本机（Android 回环 / iOS 进程内 scheme） |
 | 🛡️ **iOS 后台不失联** | 面板走 `pointsapi://` 进程内分发，零 TCP socket，切后台再久回来也不会「读取失败」 |
+| 🚀 **回前台不卡顿** | 避开 WebKit 挂起恢复窗口，补进程终止兜底；毛玻璃与合成层开销都压到最低（0.7.0） |
 | 🎨 **双端同构** | UI 由 Go 侧单文件 HTML 提供，改界面只改一份，iOS 与 Android 完全一致 |
 | 📱 **三种视图** | 完整卡片 / 紧凑列表一键切换；长按任意账号可拖动排序 |
 | 🌗 **双态主题** | 浅色 / 深色，状态栏图标明暗同步（「跟随系统」在 WebView 里不可靠，已移除） |
@@ -144,6 +145,45 @@ suspended 后监听 socket 停止 accept、资源可能被系统回收，回到�
 
 图标同时更新为 **V4 错位呼应**（主界面左上角同款白色空心 spark 双星，小星描边减细保证空心清晰），
 App 图标 / 面板 SVG / Android 矢量图四处同源。
+
+### 长时间后台回来不再整体卡顿（0.7.0）
+
+0.6.9 解决了「读取失败」，但留下另一个问题：**后台待久了回前台，整个界面卡顿，点一下要反应半天**。
+
+根因在 WebKit 的进程挂起机制。iOS 在 App 即将挂起时调用 `processWillBeSuspendedImmediately()`
+→ `setProcessesShouldSuspend(true)` → `ProcessThrottler::setAllowsActivities(false)`，
+此后页面**不接受任何前台活动**，绘制区还会 `hideContentUntilPendingUpdate()` 清空图层树。
+解除挂起依赖 RunningBoard 的**异步**状态回调，回前台瞬间还没生效——而原来代码一
+`didBecomeActive` 就调 `evaluateJavaScript`，它底层正是 `runJavaScriptInFrameInScriptWorld`，
+在这个窗口里会被直接拒绝，后续刷新与交互全部排队。WebKit
+[PR #66838](https://github.com/WebKit/WebKit/pull/66838) 的日志里就记着这条拒绝。
+另据 [Bug 321511](https://bugs.webkit.org/show_bug.cgi?id=321511)，进程被**挂起**（而非 kill）时
+`webViewWebContentProcessDidTerminate` 不会触发，页面会一直僵着。
+
+0.7.0 三层修复：
+
+- **回前台延后 350ms 再调 JS**：给 RunningBoard 的状态更新留出窗口，
+  短到用户察觉不出延迟，`refreshOnResume` 本身只读不写，晚一点没有副作用。
+- **补上 `webViewWebContentProcessDidTerminate`**：进程真被系统回收时自动重新加载面板，
+  不再出现「点什么都不响应」。带 **60s 冷却**，避免崩溃循环里反复闪白。
+  重载后走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**。
+- **降 GPU 常驻开销**：`.appbar` / `.bar` 的 `backdrop-filter` 从 `blur(18px)` 压到 `blur(10px)`
+  并加 `@supports` 降级（这两个面一个 sticky 一个 fixed，长期停在屏幕上，每帧都要重算模糊）；
+  删掉 `.card` 常驻的 `will-change:transform`（每张卡一个合成层，账号多了反而拖慢合成）。
+
+### 图标产物规范化（0.7.0）
+
+图标图形本身没改（V4 描边宽度保持不变），但生产流程换成标准做法：
+
+- **满幅方形、不预烘焙圆角**：iOS 自己按 ≈22.37% 裁圆角；预烘焙后圆角外侧的透明像素
+  在部分渲染路径（第三方商店 / 重签安装）会被填成纯黑，边缘发脏。
+- **RGB 无 alpha 通道**：App Store 强制要求，透明区会被渲染成纯黑。
+- **完整 13 尺寸 `AppIcon.appiconset` + 18 条 `Contents.json`**：以前只有 4 张平铺 PNG 靠
+  `sips` 现缩，主屏 / 设置页 / App Store 三种尺寸各糊一遍。
+- 由 `tools/gen_icon.py` 统一产出，`--check` 可校验合规性；`ios/build-ipa.sh` 不再现场缩放。
+- **左上角 logo 与 App 图标同源**：以前是两枚**实心**星，和 App 图标的空心描边双星是完全独立的
+  两套图形，改 App 图标时 logo 永远不跟着变；现在按 1024 画布坐标等比映射到 24 网格，
+  描边宽度同步缩放（主星 1.13 / 副星 0.66）。
 
 ### 目录
 

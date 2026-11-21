@@ -10,7 +10,8 @@
     android:viewportHeight="1024">
 
     <!-- 渐变底（用 layer-list 无法直接给 vector 上渐变，这里用两段近似色堆叠） -->
-    <path android:pathData="M232,0 L792,0 A232,232 0 0 1 1024,232 L1024,792 A232,232 0 0 1 792,1024 L232,1024 A232,232 0 0 1 0,792 L0,232 A232,232 0 0 1 232,0 Z">
+    <!-- 0.7.0：改满幅方形，与 iOS 侧去掉预烘焙圆角保持一致（Android 由 adaptive icon 裁切） -->
+    <path android:pathData="M0,0 L1024,0 L1024,1024 L0,1024 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"

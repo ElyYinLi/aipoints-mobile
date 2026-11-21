@@ -11,9 +11,19 @@ package panel
 // 返回可直接插入 innerHTML 的 <svg> 片段。
 func iconSVG(name string) string {
 	body := map[string]string{
-		// 汇总：四格 + 星
-		"spark": `<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
-		          <path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>`,
+		// 汇总：V4 双星（0.7.0 起与 App 图标同源）。
+		//
+		// 这里以前是两枚 **实心** 五角星（1.9/0.8 单位），和 App 图标的
+		// **空心描边**双星是完全独立的两套图形——改 App 图标时左上角这个
+		// logo 永远不会跟着变，用户看到的就是「进了 App 图标还是旧的」。
+		//
+		// 现在按 App 图标的 1024 画布坐标等比映射到 24 网格（除以 42.67），
+		// 描边宽度同步缩放：主星 48/42.67≈1.13，副星 28/42.67≈0.66。
+		// 图形形状、两个星的相对位置与 App 图标完全一致。
+		"spark": `<path d="M10.66,4.57 L12.05,8.34 L15.82,9.73 L12.05,11.11 L10.66,14.88 L9.27,11.11 L5.5,9.73 L9.27,8.34 Z"
+		            stroke-width="1.13"/>
+		          <path d="M16.64,14.60 L17.34,16.52 L19.26,17.22 L17.34,17.93 L16.64,19.85 L15.93,17.93 L14.01,17.22 L15.93,16.52 Z"
+		            stroke-width="0.66"/>`,
 		"refresh":  `<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>`,
 		"check":    `<path d="M4.5 12.5l5 5 10-11"/>`,
 		"checkAll": `<path d="M1.5 12.5l4.5 4.5 8-9"/><path d="M8.5 16l1.5 1.5 11-12"/>`,
@@ -61,6 +71,13 @@ func iconSVG(name string) string {
 	if !ok {
 		path = body["spark"]
 	}
+	// spark 自己带 stroke-width（主星 1.13 / 副星 0.66，取自 App 图标的等比映射），
+	// 外层 <svg> 若再写死 stroke-width="1.8"，两星会一样粗——那正是 0.6.9 之前
+	// 左上角 logo 和 App 图标对不上的原因之一。
+	if name == "spark" {
+		return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+	  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` + path + `</svg>`
+	}
 	return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
 	  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` + path + `</svg>`
 }
@@ -73,6 +90,10 @@ func iconSVG(name string) string {
 //
 // 这两条 path 由 spark 的 24×24 网格坐标映射到 1024 画布得到，
 // 三端（assets/*.svg / *.png / Android ic_launcher.xml）共用同一组坐标，不要单独改。
+// 0.7.0 规范修正：去掉 rx 圆角，改满幅方形。
+// iOS 自己按 ≈22.37% 裁圆角；图标预烘焙圆角后，圆角外侧的透明像素在部分
+// 渲染路径（第三方商店 / 重签安装）会被填成纯黑，边缘发脏。
+// 图形坐标与描边宽度一个字没动 —— 用户明确拒绝改描边。
 const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -81,7 +102,7 @@ const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"
       <stop offset="1" stop-color="#C24DFF"/>
     </linearGradient>
   </defs>
-  <rect width="1024" height="1024" rx="232" fill="url(#g)"/>
+  <rect width="1024" height="1024" fill="url(#g)"/>
   <!-- 0.6.9 V4：主界面左上角同款 spark 双星，白色空心描边，错位呼应 -->
   <!-- 主星：居中偏上 -->
   <path d="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z"

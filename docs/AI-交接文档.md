@@ -2,7 +2,7 @@
 
 > 给下一个接手这个项目的 AI（或人）看的。目标：读完这一份就能独立继续开发，不用重新逆向、不用再踩已踩过的坑。
 >
-> 最后更新：2026-11-21 · 对应版本 **0.6.9 (versionCode 24)**
+> 最后更新：2026-11-21 · 对应版本 **0.7.0 (versionCode 25)**
 
 ---
 
@@ -75,13 +75,17 @@
 │   └── cmd/pointsctl/         命令行工具：serve（起面板）/ query / checkin
 ├── ios/                       Swift 壳。⚠️ 不是 Xcode 工程，是 build-ios.sh 手写编的
 │   └── App/Sources/
-│       ├── PointsApp.swift    WKWebView 装配 + scheme handler 注册 + 导航策略
+│       ├── PointsApp.swift    WKWebView 装配 + scheme handler + 导航策略（★ 0.7.0：回前台延后调 JS、进程终止兜底）
 │       ├── PanelSchemeHandler.swift  ★ 0.6.9 A2：pointsapi:// 拦截 → MobilePanelDispatch
 │       ├── Engine.swift       引擎门面（panelURL 指向 scheme baseURL）+ Keychain
 │       └── LoginCoordinator.swift / LoginView.swift  OAuth/points:// 登录容器
 ├── android/                   Java 壳 + 零 Gradle 构建脚本 build-apk.sh
 ├── .github/workflows/         core-ci / build-android / build-ios
+├── assets/
+│   ├── app-icon.svg           图标源（满幅方形，无 rx 圆角）
+│   └── AppIcon.appiconset/    ★ 0.7.0：完整 13 尺寸 + 18 条 Contents.json（RGB 无 alpha）
 ├── tools/
+│   ├── gen_icon.py            ★ 0.7.0 图标生成器，--check 校验合规（无 alpha / 满幅 / 尺寸齐）
 │   ├── gh_sync.py             ★ 沙箱里推代码用它（见 5.1）
 │   ├── push-via-api.sh        上面那个的薄封装，等价，习惯用哪个都行
 │   └── check_secrets.py       提交前扫密钥
@@ -585,6 +589,76 @@ fmtMoney(n)  // 余额：<1 时保留两位
 > 读代码时别再以为它们还会影响推送。`send()` / `save()` 里会把 `OnStart/OnManual/Always/OnSuccess/OnFailure`
 > 一律归一化成 true，读旧配置也拦不住推送。改通知逻辑前先读 `notify.go` 的 `send()` 头注释。
 
+### 3.37 iOS 长时间后台回前台「整体卡顿」（0.7.0 根治）
+
+**症状**：切后台放着，几小时后回前台，整个界面发木——点一下要等半天才响应。
+
+**不是前端慢，也不是引擎慢。** 压测过：本地接口 0.0003s，50 并发 `Dispatch` 只要 162µs，
+Go 侧锁竞争为零；前端也没有定时器堆积。真正原因在 WebKit 的进程挂起机制，两层叠加：
+
+1. iOS 在 App 即将挂起时调 `ProcessStateMonitor::processWillBeSuspendedImmediately()`
+   → `WebProcessPool::setProcessesShouldSuspend(true)` → `ProcessThrottler::setAllowsActivities(false)`。
+   此后页面**不接受任何前台活动**，绘制区还会 `hideContentUntilPendingUpdate()` 清空图层树。
+2. **解除挂起依赖 RunningBoard 的异步回调**，回前台瞬间还没生效。而原来
+   `didBecomeActive` 里立刻 `evaluateJavaScript`，它底层是
+   `runJavaScriptInFrameInScriptWorld`——正好在拒绝名单里。
+
+WebKit [PR #66838](https://github.com/WebKit/WebKit/pull/66838) 的日志原文：
+
+> the log showed `setProcessesShouldSuspend(1)` / `setAllowsActivities 0` followed by repeated
+> **"not allowed to add foreground activity WebPageProxy::runJavaScriptInFrameInScriptWorld"**
+
+交互请求被一条条拒掉再排队，用户看到的就是「点一下反应半天」。
+
+**另一层**：[Bug 321511](https://bugs.webkit.org/show_bug.cgi?id=321511) 记录了进程被**挂起**
+（而非 kill）的情形——`webViewWebContentProcessDidTerminate` **不会触发**，
+页面就此僵死。我们之前完全没实现这个回调，等于没有任何兜底。
+
+**修法**（三处，缺一不可）：
+- `didBecomeActive` 里的 JS 调用改成 `asyncAfter(.now() + 0.35)`，避开拒绝窗口。
+  `refreshOnResume` 只读不写，晚 350ms 无副作用，用户也察觉不到。
+- 实现 `webViewWebContentProcessDidTerminate`，自动重载 `PanelSchemeHandler.baseURL`。
+  **带 60s 冷却**：进程反复崩溃时无限 reload 会一直闪白，比不恢复还糟。
+  重载后会走 `bootCheck()` → `/api/daily` 判定，今天跑过就只刷新，**不会重复签到**。
+- 顺带降 GPU 常驻开销：`.appbar`/`.bar` 的 `backdrop-filter` 从 `blur(18px)` 压到 `blur(10px)`
+  并加 `@supports` 降级（一个 sticky 一个 fixed，长期停在屏幕上，每帧都要重算模糊）；
+  删掉 `.card` 的 `will-change:transform`（每张卡一个独立合成层，账号多了反而拖慢合成）。
+
+> ⚠️ **别再动这几处**。`core/panel/perf_test.go` 有 5 项回归锁会直接失败。
+> 另外 `inactiveSchedulingPolicy` 在这条路上**用不上**：它是 iOS 17+ 可用的 API，
+> 但只管「web view 不在任何 window 里」的情形，我们的 WebView 始终在窗口内。
+
+### 3.38 图标「不清晰」和左上角 logo「不更新」（0.7.0）
+
+用户反馈两次，前三次判断都错了（怀疑圆角被二次裁切、怀疑图形占比太小、怀疑空心描边太细）。
+**教训：必须提取实物、同尺寸逐像素比对已知正确的实现，不能凭经验推断。**
+
+把 0.6.9 的真机截图和 `aipy-checkin` 的图标放到同一渲染尺寸（137px）逐像素量：
+
+| 指标 | AiPy | 我们 0.6.9 |
+|---|---|---|
+| 白色描边占画布 | 7.3% | 13.9% |
+| 同条件虚边比例 | 16.5% | 16.5% |
+
+结论：
+- **虚边比例完全一样**，所以「超采样」「LANCZOS 逐级缩」「去 alpha」都**不解决清晰度**。
+  实测 `1024→180 一步缩` 12.7%，`2048 逐级缩` 13.8%，反而略差。
+- 真正导致观感糊的是**描边太粗（1.9 倍）**：主星四角之间的凹陷被填平，星形退化成一团。
+  但**用户明确拒绝改描边**，所以 0.7.0 保留 48/28 不动。
+- **左上角 logo 不更新是另一个 bug**：`index.go` 的 `ICON('spark')` 是 24×24 **实心**路径，
+  和 App 图标的空心双星是两套独立图形，改 App 图标永远影响不到它。
+  0.7.0 已改为按 1024 坐标等比映射到 24 网格（主星 1.13 / 副星 0.66）。
+  注意 `iconSVG()` 外层原本写死 `stroke-width="1.8"`，会把 path 自带的线宽覆盖掉，
+  所以 spark 单独走一条不带外层线宽的分支。
+
+图标产物另有两条硬规范（以前都没满足）：
+- **不能预烘焙圆角**。iOS 自己按 ≈22.37% 裁；预烘焙后圆角外侧的透明像素在部分渲染路径
+  （第三方商店 / 重签安装）会被填成**纯黑**，边缘发脏。
+- **不能有 alpha 通道**。App Store 强制要求，透明区渲染成纯黑。
+  0.6.9 的 `app-icon-512.png` 有 47831 个全透明像素。
+
+现在统一由 `tools/gen_icon.py` 产出，`python3 tools/gen_icon.py --check` 可校验合规。
+
 ---
 
 ## 4. 各平台实现要点
@@ -955,3 +1029,4 @@ python3 tools/check_secrets.py
 | **0.6.7** | ① 通知「什么时候推」四个触发开关 + 「重发上次」全删，固定「启用即推」，存量配置强制归一化；② 各页签底部版本号/平台数与关闭按钮、设置页「设置」标题全删；③ 版本号迁到「签到逻辑」页底部（同时填 `state.meta` 供日志导出）；④ 设置/签到逻辑弹层用 `hideTitle`/`hideCancel` |
 | **0.6.8** | ① **App 图标改为左上角同款 spark 双星**（渐变底 + 白星，四文件同源，加 `icons_test.go`）；② 账号页令牌说明删「只有支持令牌的平台才有这个按钮」；③ 数据页导出按钮合成一行 生成/复制/导出 |
 | **0.6.9** | ① **iOS 后台「读取失败」根治（方案 A2）**：主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch` 进程内分发，零 TCP socket；前端 `j()` 给 POST 加 `X-Points-Body` 兜底头；本机 server 只留 OAuth 302 / `pointsctl`。② **图标 V4 错位呼应**：小星描边减细到 28 保空心清晰，四文件同源。③ 版本升 0.6.9 / code 24 |
+| **0.7.0** | ① **iOS 长时间后台回前台整体卡顿根治**：`didBecomeActive` 调 JS 延后 350ms 避开 WebKit `setAllowsActivities(false)` 拒绝窗口；补 `webViewWebContentProcessDidTerminate` 自动重载（60s 冷却，重载走 `bootCheck` 判定不重复签到）；`.appbar`/`.bar` 毛玻璃 `blur(18px)→blur(10px)` 加 `@supports` 降级、删 `.card` 的 `will-change`。② **图标产物规范化**：去掉 `rx` 预烘焙圆角、转 RGB 无 alpha、`tools/gen_icon.py` 产出完整 13 尺寸 appiconset（18 条 Contents.json），`build-ipa.sh` 不再 `sips` 现缩；**左上角 logo 改为与 App 图标同源的空心双星**（原来实心，所以不跟随更新）。③ 新增 `perf_test.go` 5 项回归锁。④ 版本升 0.7.0 / code 25 |

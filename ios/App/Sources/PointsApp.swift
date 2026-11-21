@@ -73,10 +73,28 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didBecomeActiveNotification)) { _ in
             awayAt = nil
-            guard let web = webView, web.url != nil else { return }
-            web.evaluateJavaScript(
-                "window.__pointsRefresh && window.__pointsRefresh()",
-                completionHandler: nil)
+            // 0.7.0（A1）：回前台不再立刻 evaluateJavaScript，先让出 350ms。
+            //
+            // 为什么必须延后：iOS 的 ProcessStateMonitor 在 App 即将挂起时会调
+            // processWillBeSuspendedImmediately() → setProcessesShouldSuspend(true)
+            // → ProcessThrottler::setAllowsActivities(false)。在这个状态下页面
+            // **不接受任何前台活动**，WebKit 官方日志里就是反复出现的
+            //   "not allowed to add foreground activity
+            //    WebPageProxy::runJavaScriptInFrameInScriptWorld"
+            // ——而这正是 evaluateJavaScript 的底层调用。
+            // 解除挂起依赖 RunningBoard 的**异步**回调，回前台瞬间还没生效，
+            // 所以原来那条一 didBecomeActive 就发的 JS 会被直接拒掉，
+            // 后面的刷新和交互全部排队，表现出来就是「点一下要反应半天」。
+            //
+            // 350ms 是给 RunningBoard 状态更新留的窗口：一次 App 切换的
+            // 状态上报通常在几十到两百毫秒内完成，350ms 有足够余量，
+            // 又短到用户察觉不出延迟。refreshOnResume 本身只读不写，多等一会儿没有副作用。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard let web = webView, web.url != nil else { return }
+                web.evaluateJavaScript(
+                    "window.__pointsRefresh && window.__pointsRefresh()",
+                    completionHandler: nil)
+            }
         }
         .fullScreenCover(item: Binding(
             get: { login.pendingProvider.map(LoginTarget.init) },
@@ -210,6 +228,33 @@ struct PanelWebView: UIViewRepresentable {
         weak var web: WKWebView?
         /// 0.6.9：面板 scheme 拦截层。持有它，保证生命周期与 WebView 一致。
         let schemeHandler = PanelSchemeHandler()
+        /// 0.7.0（A3）：上次因内容进程终止而重建页面的时刻，用于冷却。
+        private var lastRecoverAt: Date?
+
+        /// 0.7.0（A2）：WebContent 进程被系统回收后自动恢复。
+        ///
+        /// 之前完全没有实现这个回调。iOS 在内存吃紧、或在后台待久了的时候
+        /// 会直接 kill 掉 WebContent 进程，此时：
+        ///   - 页面上的 JS 全部消失，点任何按钮都毫无反应；
+        ///   - 进程是被 kill 的，不一定会回前台自动重载；
+        ///   - 这就是用户说的「整体卡顿，点一下要反应半天」里最严重的那一种。
+        ///
+        /// 注意 WebKit Bug 321511 里记录的另一种情况（进程被**挂起**而非 kill）
+        /// 不会触发本回调，那种由 A1 的延后调用兜住。
+        ///
+        /// 冷却 60s：避免进程反复崩溃时无限 reload（每次 reload 都会重跑
+        /// bootCheck，连着 reload 会造成整页反复闪白，比不恢复还糟）。
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            let now = Date()
+            if let last = lastRecoverAt, now.timeIntervalSince(last) < 60 {
+                return
+            }
+            lastRecoverAt = now
+            // 面板是单页应用，没有路由，重新加载面板地址即可回到原状态。
+            // 不 reload() 是因为进程被杀后 webView.url 可能已经不可靠，
+            // 直接用已知的面板入口更稳。
+            webView.load(URLRequest(url: PanelSchemeHandler.baseURL))
+        }
 
         /// 处理面板发来的消息。
         /// 约定：body 是 {"action":"openLogin","provider":"trae"}

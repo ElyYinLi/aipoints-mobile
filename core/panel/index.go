@@ -65,14 +65,24 @@ body{
 svg{width:22px;height:22px;display:block;flex:0 0 auto}
 
 /* ---------- 顶部 App Bar ---------- */
+/* 0.7.0：blur 从 18px 降到 10px，并做两级降级。
+   backdrop-filter 要对背后内容实时重新采样模糊，每一帧都要重新合成，
+   开销随半径和面积成倍上涨；而 .appbar 是 sticky、.bar 是 fixed，
+   两者都长期停在屏幕上，等于每帧都在算。权威建议是把半径压到 8~12px、
+   单屏最多 1~2 个毛玻璃面。视觉上 10px 与 18px 几乎看不出差别。 */
 .appbar{
   position:sticky;top:0;z-index:30;
   padding:calc(10px + var(--sat)) 18px 10px;
-  background:color-mix(in srgb,var(--surface) 88%,transparent);
-  backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);
+  background:color-mix(in srgb,var(--surface) 94%,transparent);
   display:flex;align-items:center;gap:12px;
   border-bottom:1px solid transparent;
   transition:border-color .2s;
+}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .appbar{
+    background:color-mix(in srgb,var(--surface) 88%,transparent);
+    backdrop-filter:saturate(160%) blur(10px);-webkit-backdrop-filter:saturate(160%) blur(10px);
+  }
 }
 .appbar.scrolled{border-bottom-color:var(--outline-v)}
 .brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
@@ -82,7 +92,7 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   display:grid;place-items:center;color:#fff;
   box-shadow:0 4px 14px rgba(111,80,255,.35);
 }
-.brand .logo svg{width:20px;height:20px}
+.brand .logo svg{width:22px;height:22px}
 .brand h1{font-size:16.5px;margin:0;font-weight:650;letter-spacing:-.01em;white-space:nowrap}
 .iconbtn{
   width:40px;height:40px;border-radius:var(--r-pill);border:0;padding:0;
@@ -171,7 +181,11 @@ svg{width:22px;height:22px;display:block;flex:0 0 auto}
   background:var(--card);border-radius:var(--r-xl);
   padding:16px 17px;box-shadow:var(--shadow);
   border:1px solid var(--outline-v);
-  will-change:transform;   /* 提前提层，避免动画时再合成导致掉帧 */
+  /* 0.7.0：删掉 will-change:transform。
+     它让每张卡都常驻一个独立合成层，账号一多就是几十个层，
+     每层都要占一块 GPU 显存，滚动的合成开销反而更高。
+     卡片只在入场动画和 :active 时用到 transform，浏览器自己会临时提层，
+     不需要常驻。 */
   animation:rise .32s cubic-bezier(.2,.8,.2,1) both;
 }
 @keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
@@ -311,10 +325,16 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
 .bar{
   position:fixed;left:0;right:0;bottom:0;z-index:28;
   padding:8px 14px calc(8px + var(--sab));
-  background:color-mix(in srgb,var(--surface) 90%,transparent);
-  backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);
+  background:color-mix(in srgb,var(--surface) 95%,transparent);
   border-top:1px solid var(--outline-v);
   display:flex;gap:9px;
+}
+/* 与 .appbar 同一套降级：拿不到毛玻璃就退回高不透明度纯色，视觉几乎一致。 */
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .bar{
+    background:color-mix(in srgb,var(--surface) 90%,transparent);
+    backdrop-filter:saturate(160%) blur(10px);-webkit-backdrop-filter:saturate(160%) blur(10px);
+  }
 }
 .btn{
   flex:1;border:0;border-radius:var(--r-pill);padding:11px 14px;
