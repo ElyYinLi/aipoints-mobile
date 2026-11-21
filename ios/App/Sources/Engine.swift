@@ -12,13 +12,17 @@ import Security
 final class Engine: ObservableObject {
     static let shared = Engine()
 
-    /// Go 侧面板固定端口。iOS 上同进程内的回环访问不需要任何网络权限声明。
+    /// Go 侧面板固定端口。仅用于 OAuth 302 跳转（需要真实 HTTP）；
+    /// 面板 UI 本身从 0.6.9 起走 pointsapi:// scheme，不再经这个端口取数。
     static let panelAddr = "127.0.0.1:7879"
 
     @Published private(set) var ready = false
     @Published private(set) var status = "正在启动引擎…"
 
-    var panelURL: URL? { ready ? URL(string: "http://\(Self.panelAddr)/") : nil }
+    /// 0.6.9 方案 A2：主文档与所有 API 走自定义 scheme，进程内分发给 Go，
+    /// 零 TCP socket —— 从根上绕开 iOS 后台冻结本机 listener 导致的「读取失败」。
+    /// 本机 server（127.0.0.1:7879）仍保留，仅供 WorkBuddy OAuth 302 回调使用。
+    var panelURL: URL? { ready ? PanelSchemeHandler.baseURL : nil }
 
     private var started = false
 

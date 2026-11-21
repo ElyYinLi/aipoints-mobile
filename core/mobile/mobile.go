@@ -31,7 +31,7 @@ import (
 )
 
 // Version 由壳层显示，构建时可通过 -ldflags 注入。
-var Version = "0.6.8"
+var Version = "0.6.9"
 
 type engine struct {
 	mu     sync.Mutex
@@ -290,6 +290,29 @@ func Plan(providerID string, dayOffset int) string {
 // 万一内嵌面板没起来，原生侧仍能把这个字符串展示出来或写进系统日志。
 func Logs(limit int) string {
 	return mustJSON(panel.RecentLogs(limit))
+}
+
+// PanelDispatch 在进程内分发一次面板请求，不经任何 TCP socket。
+//
+// 0.6.9 iOS 方案 A2：WKWebView 用 pointsapi:// 自定义 scheme 加载页面与 API，
+// 原生拦截后调用本函数。它复用 panel 的整个 handler（40 个接口业务逻辑只有一份），
+// 从根上绕开 iOS 后台把本机监听 socket 冻结/回收导致的「读取失败」。
+//
+// 参数与 panel.Server.Dispatch 一致。返回 JSON：
+//
+//	{"status":200,"body":"<响应原始文本，通常是 JSON>"}
+//
+// body 作为字符串交给 json.Marshal，会自动转义，Swift 侧用 JSONSerialization
+// 解回原始字符串即可，不会有转义地狱。
+func PanelDispatch(method, target, body, tzOffset string) string {
+	if inst == nil || inst.panel == nil {
+		return mustJSON(map[string]any{
+			"status": 503,
+			"body":   `{"ok":false,"error":"engine not ready"}`,
+		})
+	}
+	code, out := inst.panel.Dispatch(method, target, body, tzOffset)
+	return mustJSON(map[string]any{"status": code, "body": out})
 }
 
 func mustJSON(v any) string {

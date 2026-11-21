@@ -181,6 +181,11 @@ struct PanelWebView: UIViewRepresentable {
         cfg.websiteDataStore = .default()
         cfg.allowsInlineMediaPlayback = true
 
+        // 0.6.9 方案 A2：注册自定义 scheme，面板主文档与所有 API 在进程内分发给 Go，
+        // 不经 TCP socket。这样 iOS 后台把本机监听 socket 冻结/回收也影响不到面板。
+        cfg.setURLSchemeHandler(context.coordinator.schemeHandler,
+                                forURLScheme: PanelSchemeHandler.scheme)
+
         // 面板里的「添加账号」通过 PointsBridge.openLogin 拉起原生登录容器，
         // 与 Android 侧的 addJavascriptInterface 同名同语义
         cfg.userContentController.add(context.coordinator, name: "PointsBridge")
@@ -203,6 +208,8 @@ struct PanelWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var web: WKWebView?
+        /// 0.6.9：面板 scheme 拦截层。持有它，保证生命周期与 WebView 一致。
+        let schemeHandler = PanelSchemeHandler()
 
         /// 处理面板发来的消息。
         /// 约定：body 是 {"action":"openLogin","provider":"trae"}
@@ -253,8 +260,11 @@ struct PanelWebView: UIViewRepresentable {
             guard let u = navigationAction.request.url else {
                 decisionHandler(.cancel); return
             }
-            // 本机回环放行；points:// 交给登录协调器；其余一律拒绝（不弹 Safari）
-            if u.host == "127.0.0.1" || u.host == "localhost" {
+            // 0.6.9：pointsapi:// 是面板自己的 scheme，放行（由 PanelSchemeHandler 接管）
+            if u.scheme == PanelSchemeHandler.scheme {
+                decisionHandler(.allow)
+            } else if u.host == "127.0.0.1" || u.host == "localhost" {
+                // 本机回环放行（WorkBuddy OAuth 302 回调仍需要真实 HTTP）
                 decisionHandler(.allow)
             } else if u.scheme == "points" {
                 let q = URLComponents(url: u, resolvingAgainstBaseURL: false)?

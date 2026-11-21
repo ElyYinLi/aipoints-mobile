@@ -66,11 +66,12 @@ func iconSVG(name string) string {
 }
 
 // appIcon 生成 App 图标（1024×1024，矢量，可直接导出 PNG）。
-// 设计（0.6.8）：深蓝紫渐变底 + 白色 spark 双星，与面板左上角 logo 同源。
-// 用户反馈旧版「积分卡 + 签到勾」和左上角图标对不上，改为直接放大 spark 符号，
-// 桌面图标与界面里的品牌图形从此一致。
+// 设计（0.6.9）：深蓝紫渐变底 + 白色 spark 双星，与面板左上角 logo 同源。
+// 用户反馈 0.6.8 版小星描边过粗（46 相对自身半径 90 占比 0.51），空心被挤成一点、桌上看着糊。
+// 0.6.9 采用「V4 错位呼应」：大星居中偏上、小星放大并下移到右下、两星拉开距离，
+// 关键是小星描边按尺寸等比减细到 28 —— 空心清晰可见，小星绝不加粗（用户明确要求）。
 //
-// 这两条 path 由 spark 的 24×24 网格坐标放大 30 倍、平移到画布中心得到，
+// 这两条 path 由 spark 的 24×24 网格坐标映射到 1024 画布得到，
 // 三端（assets/*.svg / *.png / Android ic_launcher.xml）共用同一组坐标，不要单独改。
 const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
@@ -81,11 +82,11 @@ const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="232" fill="url(#g)"/>
-  <!-- spark 双星：与面板左上角 logo 同源，放大居中 -->
+  <!-- 0.6.9 V4：主界面左上角同款 spark 双星，白色空心描边，错位呼应 -->
   <!-- 主星：居中偏上 -->
-  <path d="M474.5,234.5 L531.5,387.5 L684.5,444.5 L531.5,501.5 L474.5,654.5 L417.5,501.5 L264.5,444.5 L417.5,387.5 Z"
+  <path d="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z"
         fill="none" stroke="#fff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- 副星：右下角，和左上角 logo 的大小对比一致 -->
-  <path d="M669.5,609.5 L693.5,675.5 L759.5,699.5 L693.5,723.5 L669.5,789.5 L645.5,723.5 L579.5,699.5 L645.5,675.5 Z"
-        fill="none" stroke="#fff" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 副星：右下角，放大到 112 半径、描边减细到 28，空心清晰 -->
+  <path d="M710,623 L740.1,704.9 L822,735 L740.1,765.1 L710,847 L679.9,765.1 L598,735 L679.9,704.9 Z"
+        fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`

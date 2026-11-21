@@ -2,7 +2,7 @@
 
 > 给下一个接手这个项目的 AI（或人）看的。目标：读完这一份就能独立继续开发，不用重新逆向、不用再踩已踩过的坑。
 >
-> 最后更新：2026-11-21 · 对应版本 **0.6.8 (versionCode 23)**
+> 最后更新：2026-11-21 · 对应版本 **0.6.9 (versionCode 24)**
 
 ---
 
@@ -10,19 +10,20 @@
 
 **项目是什么**：一个把多家 AI 平台「每日签到 / 领积分 / 抽奖」合到一起的手机 App，名字叫**积分矩阵**。
 
-**技术形态**：Go 写业务引擎，`gomobile bind` 编成 `.aar/.xcframework`，iOS(Swift) / Android(Java) 只做一层原生壳 + WebView；界面是 Go 里内嵌的**单文件 HTML**，跑在本机 `127.0.0.1:7879` 的 HTTP 服务上。
+**技术形态**：Go 写业务引擎，`gomobile bind` 编成 `.aar/.xcframework`，iOS(Swift) / Android(Java) 只做一层原生壳 + WebView；界面是 Go 里内嵌的**单文件 HTML**。加载方式两端不同：**Android** 跑本机 `127.0.0.1:7879` 的 HTTP 服务；**iOS（0.6.9 起）** 走 `pointsapi://panel/` 自定义 scheme，由 `WKURLSchemeHandler` 在进程内直连 Go，**零 TCP socket**。
 
 **为什么这么设计**：界面只写一份两端通用；业务逻辑只写一份 Go；凭据不出本机；平台接口改版时只需改一个 provider 文件。
 
-**当前行为（0.6.8，改动前务必确认没有破坏）**：
+**当前行为（0.6.9，改动前务必确认没有破坏）**：
 
 - **打开 App 走「今日判定」**：引擎落盘 `daily_memo.json`，今天跑过就只刷新 + 列出哪几个没签，不再发签到请求；没跑过才走完整一键签到（签到 → 领任务奖励 → 抽奖，与点底部按钮同一条 `checkinAll` 路径）。**一键签到按钮每次都真跑一轮，不受「今天跑过」限制**——这条是用户红线，别动。
-- **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）。后台读不到数据的兜底（整页重建 / 探活 / 自动重试）在 0.6.4 已全部删除，真因是 HTTP 短连接（`DisableKeepAlives`）。
+- **切后台/回前台**只刷新列表，不发任何写请求（用户要求，避免重复请求触发风控）。后台读不到数据的兜底（整页重建 / 探活 / 自动重试）在 0.6.4 已全部删除。
+- **iOS「读取失败」根治（0.6.9 方案 A2）**：真因不是前端、也不是 keep-alive（那改的是引擎→外部平台链路），而是 Apple TN2277 所述——App suspended 后本机 listening socket 停止 accept、资源可被回收，回前台旧 listener 不再恢复。0.6.9 让 iOS 主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch`，进程内复用同一套 handler，不经任何 socket。本机 server 只留给 WorkBuddy OAuth 302 与桌面 `pointsctl`。改这条链路前务必读 `ios/App/Sources/PanelSchemeHandler.swift` 头注释与本文第 3 节。
 - 签到进度全程显示在顶部活动条（`#act`），逐账号 `正在签到…（2/3）`
 - **没有「···」入口**（0.6.4 全删）：任务 / 抽奖直接摆卡片与紧凑行；令牌 / 停用 / 删除放在 设置 → 账号 的行内按钮；长按账号名改备注
 - **通知（0.6.7 起「启用即推」）**：「什么时候推」四个触发开关 + 「重发上次」全删，只要通知启用，每轮签到都推一条 Webhook（五渠道），失败项置顶；`on_start/on_manual/always` 存量值在 save/send 时强制归一化成 true，不参与判断
 
-**界面结构**：主界面顶栏 = logo(spark 双星) + 标题 + 刷新/主题/设置；设置弹层四个页签 通知/账号/数据/日志（无标题栏、无关闭按钮，点遮罩关闭）；版本号只在「签到逻辑」页底部；数据页导出行 = 生成/复制/导出 三按钮一行。
+**界面结构**：主界面顶栏 = logo(spark 双星，0.6.9 起为 V4 错位呼应：大星居中 + 小星右下、描边减细保空心) + 标题 + 刷新/主题/设置；设置弹层四个页签 通知/账号/数据/日志（无标题栏、无关闭按钮，点遮罩关闭）；版本号只在「签到逻辑」页底部；数据页导出行 = 生成/复制/导出 三按钮一行。
 
 **0.6.0 新增的规则（都在 `core/panel/` 里，改之前先读对应文件头注释）**：
 
@@ -73,6 +74,11 @@
 │   ├── mobile/                gomobile 导出层（只管 JSON 字符串进出）
 │   └── cmd/pointsctl/         命令行工具：serve（起面板）/ query / checkin
 ├── ios/                       Swift 壳。⚠️ 不是 Xcode 工程，是 build-ios.sh 手写编的
+│   └── App/Sources/
+│       ├── PointsApp.swift    WKWebView 装配 + scheme handler 注册 + 导航策略
+│       ├── PanelSchemeHandler.swift  ★ 0.6.9 A2：pointsapi:// 拦截 → MobilePanelDispatch
+│       ├── Engine.swift       引擎门面（panelURL 指向 scheme baseURL）+ Keychain
+│       └── LoginCoordinator.swift / LoginView.swift  OAuth/points:// 登录容器
 ├── android/                   Java 壳 + 零 Gradle 构建脚本 build-apk.sh
 ├── .github/workflows/         core-ci / build-android / build-ios
 ├── tools/
@@ -685,10 +691,10 @@ python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
 
 | 文件 | 字段 |
 |---|---|
-| `core/mobile/mobile.go` | `var Version = "0.6.8"` |
-| `android/app/src/main/AndroidManifest.xml` | `versionCode` / `versionName`（0.6.8 → 23 / 0.6.8，code 每次必须 +1，否则覆盖安装会被拒） |
-| `ios/App/Info.plist` | `CFBundleShortVersionString` 0.6.8 / `CFBundleVersion` 23 |
-| `README.md` | version badge `version-0.6.8` |
+| `core/mobile/mobile.go` | `var Version = "0.6.9"` |
+| `android/app/src/main/AndroidManifest.xml` | `versionCode` / `versionName`（0.6.9 → 24 / 0.6.9，code 每次必须 +1，否则覆盖安装会被拒） |
+| `ios/App/Info.plist` | `CFBundleShortVersionString` 0.6.9 / `CFBundleVersion` 24 |
+| `README.md` | version badge `version-0.6.9` |
 
 漏改一处的症状：设置页显示旧版本号，或覆盖安装被系统拒绝（versionCode 没 +1）。
 
@@ -737,7 +743,7 @@ python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
 2. HTML 里写 `{{ICON:name}}`，Go 渲染时替换
 3. 需要 JS 动态用时，`ICON('name')` 直接取
 
-**App 桌面图标（0.6.8）**：必须与主界面左上角 logo 同源——深蓝紫渐变圆角底 + 白色 **spark 双星**（大星居中偏上、小星右下）。四份文件共用同一组 1024 画布坐标（`M474.5,234.5...` / `M669.5,609.5...`），改一处就要全改：
+**App 桌面图标（0.6.9 V4 错位呼应）**：必须与主界面左上角 logo 同源——深蓝紫渐变圆角底 + 白色 **spark 双星空心描边**。V4 把小星半径放大、描边减细到 28（用户红线：**小星不许加粗，否则看不到空心**）。四份文件共用同一组 1024 画布坐标（主星 `M455,195...` / 副星 `M710,623...`），改一处就要全改：
 
 | 文件 | 用途 |
 |---|---|
@@ -746,7 +752,7 @@ python3 tools/gh_sync.py --repo ElyYinLi/aipoints-mobile --message "feat: xxx"
 | `assets/app-icon-512.png` / `app-icon-small.png` | iOS 构建取用（由 SVG 用 cairosvg 渲染，1024 / 540） |
 | `android/app/src/main/res/drawable/ic_launcher.xml` | Android VectorDrawable（同坐标转写） |
 
-坐标由 spark 的 24×24 路径放大 30 倍、平移到画布中心得到。有 `icons_test.go` 钉住三端坐标一致，改完跑 `go test ./panel/`。
+有 `icons_test.go` 钉住三端坐标一致（含 V4 的 `M455,195` / `M710,623` / `stroke-width="28"`），改完跑 `go test ./panel/`。
 
 ### 6.2 加新平台不用改这个文件
 
@@ -948,3 +954,4 @@ python3 tools/check_secrets.py
 | **0.6.6** | ① 日志时间差 8 小时根治：前端每个请求带 `X-TZ-Offset`，服务端据此换算日志时间戳；② 删三处占空间提示语（账号/数据/日志页）；③ 账号名长按改备注（500ms，加 `POST /api/account/label`）；④ 添加账号页删「手动粘贴/导入备份」与「关闭」按钮 |
 | **0.6.7** | ① 通知「什么时候推」四个触发开关 + 「重发上次」全删，固定「启用即推」，存量配置强制归一化；② 各页签底部版本号/平台数与关闭按钮、设置页「设置」标题全删；③ 版本号迁到「签到逻辑」页底部（同时填 `state.meta` 供日志导出）；④ 设置/签到逻辑弹层用 `hideTitle`/`hideCancel` |
 | **0.6.8** | ① **App 图标改为左上角同款 spark 双星**（渐变底 + 白星，四文件同源，加 `icons_test.go`）；② 账号页令牌说明删「只有支持令牌的平台才有这个按钮」；③ 数据页导出按钮合成一行 生成/复制/导出 |
+| **0.6.9** | ① **iOS 后台「读取失败」根治（方案 A2）**：主文档 + 全部 API 走 `pointsapi://panel/`，`WKURLSchemeHandler` → `MobilePanelDispatch` → `panel.Server.Dispatch` 进程内分发，零 TCP socket；前端 `j()` 给 POST 加 `X-Points-Body` 兜底头；本机 server 只留 OAuth 302 / `pointsctl`。② **图标 V4 错位呼应**：小星描边减细到 28 保空心清晰，四文件同源。③ 版本升 0.6.9 / code 24 |

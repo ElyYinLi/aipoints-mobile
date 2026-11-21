@@ -497,3 +497,19 @@ func TestDataTabExportButtonsInOneRow(t *testing.T) {
 		t.Fatal("复制按钮仍被设成独占一行")
 	}
 }
+
+// 0.6.9 方案 A2：前端 j() 必须给 POST body 加 X-Points-Body 兜底头。
+// iOS 走 pointsapi:// 自定义 scheme 时，个别 iOS 版本会 strip 掉
+// WKURLSchemeHandler 请求的 httpBody；原生层回退读这个 header。
+// 桌面 HTTP server 不认这个头、自动忽略，所以全局加上无副作用。
+func TestPointsBodyFallbackHeader(t *testing.T) {
+	src := indexHTML
+	for _, want := range []string{
+		"opt.headers['X-TZ-Offset'] = String(new Date().getTimezoneOffset());",
+		"if (opt.body) opt.headers['X-Points-Body'] = encodeURIComponent(opt.body);",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("j() 缺少 A2 兜底：%q", want)
+		}
+	}
+}

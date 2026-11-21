@@ -9,6 +9,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,12 @@ type Options struct {
 type Server struct {
 	opt Options
 	srv *http.Server
+	// handler 是同一个 mux（含时区 middleware，不含 loopbackOnly 的 Host 校验）。
+	// 0.6.9：iOS 改用 WKURLSchemeHandler 拦截 pointsapi://，在进程内直接调这个
+	// handler 分发请求，完全不经 TCP socket —— 从根上绕开「iOS 后台把本机监听
+	// socket 冻结/回收，回前台不再 accept」导致的「读取失败」。桌面 pointsctl
+	// 仍走 s.srv 的真实 HTTP。两者共用同一套 handler，业务逻辑只有一份。
+	handler http.Handler
 	// oauth 保存进行中的 WorkBuddy OAuth state（内存态，进程结束即丢）。
 	// key 是平台 id，value 是服务端签发的一次性 state。
 	oauthMu sync.Mutex
@@ -139,17 +147,63 @@ func New(opt Options) *Server {
 	mux.HandleFunc("/login/", s.handleLoginRedirect)
 	mux.HandleFunc("/api/oauth/start", s.handleOAuthStart)
 	mux.HandleFunc("/api/oauth/finish", s.handleOAuthFinish)
+	// 0.6.9：保存同一套 handler 供 iOS scheme 在进程内分发（不经 TCP、不校验 Host——
+	// 内存调用没有 DNS rebinding 风险）。真实 HTTP server 才套 loopbackOnly。
+	s.handler = withLogTimezone(mux)
 	// 本地回环服务，但 WebView 里的页面同源可访问：加 Host 校验，挡住 DNS rebinding
 	// （攻击者把域名解析到 127.0.0.1 并从网页里读走账号数据）。
 	s.srv = &http.Server{
 		Addr:              opt.Addr,
-		Handler:           loopbackOnly(withLogTimezone(mux)),
+		Handler:           loopbackOnly(s.handler),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 	}
 	return s
 }
+
+// Dispatch 在进程内分发一次面板请求，完全不经过 TCP socket。
+//
+// 0.6.9 iOS 方案 A2 的核心：WKWebView 用 pointsapi:// 自定义 scheme 加载页面，
+// 所有 fetch('/api/...') 被原生拦截后调到这里。这里构造内存 request/response，
+// 直接跑 s.handler（含时区 middleware），复用全部 40 个 handler 的业务逻辑——
+// 日志、脱敏、轮次号、签到串行化等一律保持不变，只有传输层从 TCP 换成了内存调用。
+//
+// method: GET/POST；target: "/api/xxx?a=b"；body: POST 的 JSON 文本；
+// tzOffset: 页面 new Date().getTimezoneOffset() 字符串（可为 ""）。
+// 返回 (statusCode, responseBodyJSON)。响应统一是 JSON（面板所有 /api 都返回 JSON）。
+func (s *Server) Dispatch(method, target, body, tzOffset string) (int, string) {
+	if method == "" {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequest(method, "http://pointsapi.local"+target, strings.NewReader(body))
+	if err != nil {
+		return http.StatusBadRequest, `{"ok":false,"error":"bad request"}`
+	}
+	if tzOffset != "" {
+		req.Header.Set("X-TZ-Offset", tzOffset)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := newRecorder()
+	s.handler.ServeHTTP(rec, req)
+	return rec.code, rec.buf.String()
+}
+
+// recorder 是内存版 http.ResponseWriter，避免为 Dispatch 引入 net/http/httptest。
+type recorder struct {
+	header http.Header
+	buf    bytes.Buffer
+	code   int
+}
+
+func newRecorder() *recorder {
+	return &recorder{header: make(http.Header), code: http.StatusOK}
+}
+func (r *recorder) Header() http.Header         { return r.header }
+func (r *recorder) Write(b []byte) (int, error) { return r.buf.Write(b) }
+func (r *recorder) WriteHeader(code int)        { r.code = code }
 
 // loopbackOnly 只接受 Host 为回环地址的请求。
 //

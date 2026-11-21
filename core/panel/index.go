@@ -772,6 +772,10 @@ body.reordering *{user-select:none!important;-webkit-user-select:none!important}
     // 换算日志时间。不能只在启动时报一次：进程重建 / WebView 重新加载后内存值会丢。
     opt.headers = opt.headers || {};
     opt.headers['X-TZ-Offset'] = String(new Date().getTimezoneOffset());
+    // 0.6.9：POST body 双保险。iOS 走 pointsapi:// 自定义 scheme 时，
+    // WKURLSchemeHandler 的 httpBody 正常会带上；这里额外把 body 编码进 header
+    // 让原生层兜底读取（桌面 HTTP server 不认这个 header，自动忽略，无副作用）。
+    if (opt.body) opt.headers['X-Points-Body'] = encodeURIComponent(opt.body);
     var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
     if (ctrl) opt.signal = ctrl.signal;
     return fetch(u, opt).then(function(r){

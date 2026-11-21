@@ -7,9 +7,11 @@
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="232" fill="url(#g)"/>
-  <!-- 0.6.8：主界面左上角同款 spark 双星，白色描边、放大居中；与 appIcon / Android 图标同源 -->
-  <path d="M474.5,234.5 L531.5,387.5 L684.5,444.5 L531.5,501.5 L474.5,654.5 L417.5,501.5 L264.5,444.5 L417.5,387.5 Z"
+  <!-- 0.6.9 V4 错位呼应：主界面左上角同款 spark 双星，白色空心描边；与 appIcon / Android 图标同源 -->
+  <!-- 主星：居中偏上 -->
+  <path d="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z"
         fill="none" stroke="#fff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M669.5,609.5 L693.5,675.5 L759.5,699.5 L693.5,723.5 L669.5,789.5 L645.5,723.5 L579.5,699.5 L645.5,675.5 Z"
-        fill="none" stroke="#fff" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 副星：右下角，放大到 112 半径、描边减细到 28，空心清晰 -->
+  <path d="M710,623 L740.1,704.9 L822,735 L740.1,765.1 L710,847 L679.9,765.1 L598,735 L679.9,704.9 Z"
+        fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -5,7 +5,7 @@
 **一次点击，把所有平台的签到、任务奖励、抽奖机会全部做完。**
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-0.6.8-4F5BD5">
+  <img alt="version" src="https://img.shields.io/badge/version-0.6.9-4F5BD5">
   <img alt="platform" src="https://img.shields.io/badge/platform-iOS%2015%2B%20%7C%20Android%208%2B-2ea44f">
   <img alt="go" src="https://img.shields.io/badge/Go-1.21%2B-00ADD8">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -35,7 +35,9 @@
 打开之后想再补一次，点底部「一键签到」即可 —— 它和打开 App 做的事**完全一样**。
 切后台、回到前台**不会**自动签，只刷新列表（少发请求，降低风控概率）。
 
-它不依赖任何服务器：引擎跑在手机本地回环地址，凭据只存在系统安全存储里。
+它不依赖任何云端服务器，凭据只存在系统安全存储里。Android 引擎跑在 `127.0.0.1` 回环；
+iOS 从 0.6.9 起改用 `pointsapi://` 自定义 scheme 在进程内直连引擎（见下方「iOS 后台不再读取失败」），
+彻底不碰本机监听端口。
 
 **核心取舍：宁可少做一个功能，也不把凭据发到云端。**
 
@@ -45,7 +47,8 @@
 |---|---|
 | ⚡ **打开即全套** | 冷启动自动跑「签到 → 领任务奖励 → 抽奖」，与手动点「一键签到」走的同一条代码路径 |
 | 📊 **状态可见** | 顶部活动条逐个账号显示进度（`百度搭子 正在签到…（2/3）`），完成后变绿、失败变红，几秒自动收起 |
-| 🔒 **本地优先** | 引擎监听 `127.0.0.1`，凭据进 iOS Keychain / Android Keystore，不经任何第三方服务器 |
+| 🔒 **本地优先** | 凭据进 iOS Keychain / Android Keystore，不经任何第三方服务器；引擎不出本机（Android 回环 / iOS 进程内 scheme） |
+| 🛡️ **iOS 后台不失联** | 面板走 `pointsapi://` 进程内分发，零 TCP socket，切后台再久回来也不会「读取失败」 |
 | 🎨 **双端同构** | UI 由 Go 侧单文件 HTML 提供，改界面只改一份，iOS 与 Android 完全一致 |
 | 📱 **三种视图** | 完整卡片 / 紧凑列表一键切换；长按任意账号可拖动排序 |
 | 🌗 **双态主题** | 浅色 / 深色，状态栏图标明暗同步（「跟随系统」在 WebView 里不可靠，已移除） |
@@ -115,12 +118,32 @@ go run ./cmd/pointsctl -action serve -dir /tmp/pts
 ├──────────────────────────────────────────────────────┤
 │  core/  Go 引擎（唯一有业务逻辑的地方）               │
 │    provider/   平台适配器，统一 Provider 接口          │
-│    panel/      本机回环 HTTP 面板（内嵌单文件 HTML）   │
+│    panel/      面板服务 + 内嵌单文件 HTML + 进程内 Dispatch│
 │    store/      账号存储抽象（壳层换成 Keychain/Keystore）│
 │    scheduler/  当日随机错峰（FNV-1a 稳定哈希）         │
 │    mobile/     gomobile bind 导出层（JSON 字符串进出） │
 └──────────────────────────────────────────────────────┘
 ```
+
+### iOS 后台不再「读取失败」（0.6.9，方案 A2）
+
+长期困扰的「切后台久了回来显示读取失败」，根因不在前端：Apple 在
+[TN2277](https://developer.apple.com/library/archive/qa/qa1838/_index.html) 明确说明，App 被
+suspended 后监听 socket 停止 accept、资源可能被系统回收，回到前台旧 listener 也不会自动恢复。
+过去只重建 WebView、改 HTTP keep-alive 都改错了链路。
+
+0.6.9 从架构上绕开这条不可靠链路：
+
+- **页面 + 全部 API 走 `pointsapi://panel/`**：`WKURLSchemeHandler` 拦截后调用 gomobile 导出的
+  `PanelDispatch`，在进程内直接复用 panel 的同一套 handler（业务逻辑只有一份），**零 TCP socket**，
+  iOS 的后台挂起机制无从切断。
+- **前端零改动**：`fetch('/api/xxx')` 在 `pointsapi://panel/` 页面下自动解析为同源 scheme 请求；
+  POST body 除 `httpBody` 外额外写进 `X-Points-Body` 头兜底（个别 iOS 版本会 strip 掉自定义
+  scheme 的请求体）。桌面 HTTP server 忽略该头，无副作用。
+- **本机 server 仅保留**给 WorkBuddy OAuth 302 回调和桌面 `pointsctl` 调试用，不再是 UI 数据链路。
+
+图标同时更新为 **V4 错位呼应**（主界面左上角同款白色空心 spark 双星，小星描边减细保证空心清晰），
+App 图标 / 面板 SVG / Android 矢量图四处同源。
 
 ### 目录
 

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- App 图标：由 core/panel/icons.go 的 appIcon 转写为 Android VectorDrawable。
-     0.6.8：白色 spark 双星，与面板左上角 logo / iOS 图标同源，坐标三端共用。
+     0.6.9 V4 错位呼应：白色空心 spark 双星，小星描边减细到 28（空心清晰），与面板 logo / iOS 图标同源，坐标三端共用。
      用矢量而非 PNG：一个文件适配所有密度，APK 体积不变大。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -26,9 +26,9 @@
     <!-- 主星：居中偏上 -->
     <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
         android:strokeWidth="48" android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M474.5,234.5 L531.5,387.5 L684.5,444.5 L531.5,501.5 L474.5,654.5 L417.5,501.5 L264.5,444.5 L417.5,387.5 Z" />
-    <!-- 副星：右下角 -->
+        android:pathData="M455,195 L514.1,355.9 L675,415 L514.1,474.1 L455,635 L395.9,474.1 L235,415 L395.9,355.9 Z" />
+    <!-- 副星：右下角，放大到 112 半径、描边减细到 28，空心清晰 -->
     <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="46" android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M669.5,609.5 L693.5,675.5 L759.5,699.5 L693.5,723.5 L669.5,789.5 L645.5,723.5 L579.5,699.5 L645.5,675.5 Z" />
+        android:strokeWidth="28" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M710,623 L740.1,704.9 L822,735 L740.1,765.1 L710,847 L679.9,765.1 L598,735 L679.9,704.9 Z" />
 </vector>
